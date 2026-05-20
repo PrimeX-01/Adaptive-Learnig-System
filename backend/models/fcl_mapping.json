@@ -1,0 +1,34 @@
+{
+  "Low": {
+    "fcl_range": "1-4",
+    "description": "Foundational comprehension, Grades 1-4"
+  },
+  "Developing": {
+    "fcl_range": "5-7",
+    "description": "Elementary comprehension, Grades 5-7"
+  },
+  "Proficient": {
+    "fcl_range": "8-10",
+    "description": "Secondary comprehension, Grades 8-10"
+  },
+  "Advanced": {
+    "fcl_range": "11-T",
+    "description": "Advanced/Tertiary comprehension"
+  },
+  "topic_subject_map": {
+    "mathematics_algebra":    "MATH",
+    "mathematics_geometry":   "MATH",
+    "mathematics_calculus":   "MATH",
+    "mathematics_statistics": "MATH",
+    "science_biology":        "SCI",
+    "science_chemistry":      "SCI",
+    "science_physics":        "SCI",
+    "english_comprehension":  "ENG",
+    "english_writing":        "ENG",
+    "english_literature":     "ENG",
+    "social_studies":         "SOC",
+    "civics":                 "SOC",
+    "computer_science":       "CS",
+    "programming":            "CS"
+  }
+}

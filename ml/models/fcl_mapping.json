@@ -1,0 +1,18 @@
+{
+  "Low": {
+    "fcl_range": "1-4",
+    "description": "Foundational comprehension, Grades 1-4"
+  },
+  "Developing": {
+    "fcl_range": "5-7",
+    "description": "Elementary comprehension, Grades 5-7"
+  },
+  "Proficient": {
+    "fcl_range": "8-10",
+    "description": "Secondary comprehension, Grades 8-10"
+  },
+  "Advanced": {
+    "fcl_range": "11-T",
+    "description": "Advanced/Tertiary comprehension"
+  }
+}

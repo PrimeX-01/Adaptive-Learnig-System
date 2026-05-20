@@ -1,0 +1,18 @@
+# Node modules
+node_modules/
+frontend/node_modules/
+
+# Build cache
+frontend/.cache/
+frontend/node_modules/.cache/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# OS
+.DS_Store
+Thumbs.db

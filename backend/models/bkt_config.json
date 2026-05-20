@@ -1,0 +1,37 @@
+{
+  "mathematics_algebra": {
+    "prior": 0.15,
+    "learns": 0.3,
+    "guesses": 0.2,
+    "slips": 0.1,
+    "mastery_threshold": 0.95
+  },
+  "mathematics_geometry": {
+    "prior": 0.1,
+    "learns": 0.25,
+    "guesses": 0.2,
+    "slips": 0.1,
+    "mastery_threshold": 0.95
+  },
+  "science_biology": {
+    "prior": 0.2,
+    "learns": 0.35,
+    "guesses": 0.25,
+    "slips": 0.12,
+    "mastery_threshold": 0.95
+  },
+  "english_comprehension": {
+    "prior": 0.25,
+    "learns": 0.3,
+    "guesses": 0.2,
+    "slips": 0.1,
+    "mastery_threshold": 0.95
+  },
+  "social_studies": {
+    "prior": 0.2,
+    "learns": 0.35,
+    "guesses": 0.25,
+    "slips": 0.12,
+    "mastery_threshold": 0.95
+  }
+}
