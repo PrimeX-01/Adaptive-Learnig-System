@@ -1,220 +1,460 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import PageShell from '../components/PageShell';
+import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import Sidebar from '../components/Sidebar';
+import Navbar  from '../components/Navbar';
+import {
+  getTeacherDashboard, getMyStudents,
+  getStrugglingStudents, getDirectives, upsertDirective, deleteDirective,
+  getMySubjects,
+} from '../services/teacher';
 import api from '../services/api';
+import styles from './TeacherDashboard.module.css';
 
-const CHART_TOOLTIP = { contentStyle:{ background:'#0F172A', border:'1px solid #1E293B', borderRadius:'8px', color:'#F1F5F9', fontSize:11 }, labelStyle:{color:'#64748B'} };
-const TABS = ['Overview','Students','Messages','Interventions'];
+const TABS = ['overview', 'students', 'directives', 'heatmap', 'engagement'];
 
-export default function TeacherDashboard() {
-  const nav = useNavigate();
-  // Double guard
-  useEffect(() => { if (!window.__isTeacher) nav('/dashboard', {replace:true}); },[]);
-  if (!window.__isTeacher) return null;
+export default function TeacherDashboard({ tab: initialTab = 'overview' }) {
+  const { user } = useAuth();
+  const [activeTab, setActiveTab]   = useState(initialTab);
+  const [sideOpen, setSideOpen]     = useState(false);
+  const [loading, setLoading]       = useState(true);
+  const [dashboard, setDashboard]   = useState(null);
+  const [students, setStudents]     = useState([]);
+  const [struggling, setStruggling] = useState([]);
+  const [directives, setDirectives] = useState([]);
+  const [subjects, setSubjects]     = useState([]);
+  const [filterSubject, setFilterSubject] = useState('');
+  const teacherId = user?.id;
 
-  const [tab,          setTab]      = useState('Overview');
-  const [dashData,     setDashData] = useState(null);
-  const [selSubject,   setSelSubj]  = useState('all');  // selected subject filter
-  const [selectedStudent, setSelSt] = useState(null);
-  const [studentDetail,   setDetail]= useState(null);
-  const [loading,      setLoading]  = useState(true);
-  // Interventions state
-  const [selIds,   setSelIds]  = useState([]);
-  const [tipTopic, setTipTopic]= useState('mathematics_algebra');
-  const [tipNote,  setTipNote] = useState('');
-  const [tipSending, setTipSend]=useState(false);
-  const [tipPreview, setTipPrev]=useState('');
-  // Messages state
-  const [inbox, setInbox] = useState([]);
-  const [thread,setThread]= useState(null);
-  const [reply, setReply] = useState('');
-  const sid = window.__studentId;
+  // Heatmap state
+  const [heatmapData, setHeatmapData] = useState(null);
+  const [selectedSubjectId, setSelectedSubjectId] = useState('');
+  const [heatmapLoading, setHeatmapLoading] = useState(false);
+
+  // Engagement state
+  const [engagementData, setEngagementData] = useState(null);
+  const [engagementLoading, setEngagementLoading] = useState(false);
 
   useEffect(() => {
     Promise.all([
-      api.get(`/api/teachers/dashboard/1${selSubject!=='all'?`?subject_code=${selSubject}`:''}`),
-      api.get(`/api/messages/inbox/${sid}`),
-    ]).then(([d, msgs]) => {
-      setDashData(d.data); setInbox(msgs.data);
-    }).finally(()=>setLoading(false));
-  }, [sid, selSubject]);
+      getTeacherDashboard(),
+      getMyStudents(),
+      getStrugglingStudents(),
+      getDirectives(),
+      getMySubjects(),
+    ]).then(([dash, studs, struggling, dirs, subs]) => {
+      setDashboard(dash);
+      setStudents(studs ?? []);
+      setStruggling(struggling ?? []);
+      setDirectives(dirs ?? []);
+      setSubjects(subs ?? []);
+    }).catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
 
-  async function openStudentDetail(studentId) {
-    setSelSt(studentId);
-    const { data } = await api.get(`/api/teachers/student/${studentId}/deep-dive`);
-    setDetail(data);
-  }
+  // Load heatmap when tab changes
+  useEffect(() => {
+    if (activeTab === 'heatmap' && teacherId && !heatmapData) {
+      loadHeatmap();
+    }
+  }, [activeTab, teacherId]);
 
-  async function sendReply(receiverId) {
-    if (!reply.trim()) return;
-    await api.post('/api/messages/send', {
-      receiver_id: receiverId, subject: `Re: ${thread?.subject}`,
-      body: reply, thread_id: thread?.thread_id || thread?.id,
-    });
-    setReply(''); setThread(null);
-    const { data } = await api.get(`/api/messages/inbox/${sid}`);
-    setInbox(data);
-  }
+  // Load engagement when tab changes
+  useEffect(() => {
+    if (activeTab === 'engagement' && teacherId && !engagementData) {
+      loadEngagement();
+    }
+  }, [activeTab, teacherId]);
 
-  async function sendBulkTip() {
-    if (!selIds.length) return;
-    setTipSend(true);
-    const { data } = await api.post('/api/messages/bulk-tip', {
-      student_ids: selIds, topic_id: tipTopic, custom_note: tipNote,
-    });
-    setTipPrev(data.tip_preview); setTipSend(false); setSelIds([]);
-  }
+  const loadHeatmap = async () => {
+    setHeatmapLoading(true);
+    try {
+      const params = selectedSubjectId ? `?subject_id=${selectedSubjectId}` : '';
+      const res = await api.get(`/api/teachers/heatmap/${teacherId}${params}`);
+      setHeatmapData(res.data);
+    } catch (err) {
+      console.error('Failed to load heatmap', err);
+    } finally {
+      setHeatmapLoading(false);
+    }
+  };
 
-  if (loading) return <div className='min-h-screen bg-app flex items-center justify-center'><div className='w-10 h-10 border-4 border-teal/30 border-t-teal rounded-full animate-spin' /></div>;
+  const loadEngagement = async () => {
+    setEngagementLoading(true);
+    try {
+      const res = await api.get(`/api/teachers/engagement/${teacherId}`);
+      setEngagementData(res.data);
+    } catch (err) {
+      console.error('Failed to load engagement', err);
+    } finally {
+      setEngagementLoading(false);
+    }
+  };
 
-  const { students=[], at_risk=[], fcl_distribution=[], teacher_subjects=[], total_students=0 } = dashData||{};
-  const unread = inbox.filter(m=>!m.is_read).length;
+  const handleSubjectChange = (e) => {
+    setSelectedSubjectId(e.target.value);
+    setHeatmapData(null);
+    loadHeatmap();
+  };
+
+  useEffect(() => { setActiveTab(initialTab); }, [initialTab]);
+
+  const getMasteryColor = (level) => {
+    const colors = { 0: '#64748B', 1: '#F59E0B', 2: '#3B82F6', 3: '#10B981' };
+    return colors[level] || '#64748B';
+  };
 
   return (
-    <PageShell title='Teacher Command Centre' subtitle={`${total_students} students across your subjects`} unreadCount={unread}>
+    <div className="dashboard-shell">
+      <Sidebar open={sideOpen} onClose={() => setSideOpen(false)} />
 
-      {/* Subject filter bar */}
-      <div className='flex items-center gap-3 mb-5'>
-        <span className='text-muted text-xs'>Showing:</span>
-        <button onClick={()=>setSelSubj('all')} className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${selSubject==='all'?'border-teal bg-teal/10 text-teal':'border-border text-muted hover:text-primary'}`}>All Subjects</button>
-        {teacher_subjects.map(s=>(
-          <button key={s.code} onClick={()=>setSelSubj(s.code)} className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${selSubject===s.code?'border-teal bg-teal/10 text-teal':'border-border text-muted hover:text-primary'}`}>{s.name}</button>
-        ))}
-      </div>
+      <div className="dashboard-main" style={{ paddingTop: 'var(--navbar-height)' }}>
+        <Navbar onMenuToggle={() => setSideOpen(p => !p)} />
 
-      {/* Tab navigation */}
-      <div className='flex gap-1 p-1 bg-card border border-border rounded-xl mb-6 w-fit'>
-        {TABS.map(t=>(
-          <button key={t} onClick={()=>setTab(t)} className={`px-5 py-2 rounded-lg text-sm font-medium transition-all ${tab===t?'bg-teal text-app':'text-muted hover:text-primary'}`}>
-            {t}{t==='Messages'&&unread>0&&<span className='ml-1 badge-teal text-xs'>{unread}</span>}
-          </button>
-        ))}
-      </div>
+        <div className="dashboard-content">
+          <div className={styles.header}>
+            <div>
+              <h1 className={styles.title}>
+                Welcome, <span>{user?.first_name}</span>
+              </h1>
+              <p className={styles.subtitle}>Manage your class and AI instructions</p>
+            </div>
+          </div>
 
-      {/* OVERVIEW TAB */}
-      {tab==='Overview' && (
-        <div>
-          <div className='grid grid-cols-4 gap-4 mb-6'>
-            {[['Total Students',total_students,'👥'],['At Risk',at_risk.length,'⚠'],['Avg Accuracy',students.length?Math.round(students.reduce((s,x)=>s+x.accuracy,0)/students.length)+'%':'—','◎'],['Subjects',teacher_subjects.length,'📚']].map(([l,v,i])=>(
-              <div key={l} className='card-hover p-5'><div className='flex justify-between items-center mb-3'><span className='text-muted text-xs uppercase tracking-wide'>{l}</span><span className='text-xl'>{i}</span></div><div className='stat-number text-3xl font-bold text-primary'>{v}</div></div>
+          <div className={styles.tabs}>
+            {TABS.map(t => (
+              <button
+                key={t}
+                className={`${styles.tab} ${activeTab === t ? styles.activeTab : ''}`}
+                onClick={() => setActiveTab(t)}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
             ))}
           </div>
-          <div className='card p-5'>
-            <h3 className='text-primary font-semibold text-sm mb-4'>FCL Distribution</h3>
-            <ResponsiveContainer width='100%' height={200}>
-              <BarChart data={fcl_distribution}><CartesianGrid strokeDasharray='3 3' stroke='#1E293B' /><XAxis dataKey='fcl_label' tick={{fontSize:11,fill:'#64748B'}} /><YAxis tick={{fontSize:11,fill:'#64748B'}} /><Tooltip {...CHART_TOOLTIP} /><Bar dataKey='count' fill='#00D4C8' radius={[3,3,0,0]} /></BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
 
-      {/* STUDENTS TAB */}
-      {tab==='Students' && (
-        <div className='card overflow-hidden'>
-          <div className='px-5 py-4 border-b border-border'><h3 className='text-primary font-semibold text-sm'>All Students ({students.length})</h3></div>
-          <div className='overflow-x-auto'>
-            <table className='w-full'>
-              <thead><tr className='border-b border-border'>{['Name','Grade','Subject','FCL','Accuracy','Hints/Q','Status','Actions'].map(h=><th key={h} className='py-3 px-4 text-left text-muted text-xs uppercase tracking-wide font-medium'>{h}</th>)}</tr></thead>
-              <tbody>
-                {students.map(s=>(
-                  <tr key={`${s.student_id}-${s.subject_code}`} className='border-b border-border/50 hover:bg-border/20 transition-colors'>
-                    <td className='py-3 px-4 text-primary text-sm font-medium'>{s.name}</td>
-                    <td className='py-3 px-4 stat-number text-muted text-sm'>{s.grade}</td>
-                    <td className='py-3 px-4'><span className='badge-teal text-xs'>{s.subject_code}</span></td>
-                    <td className='py-3 px-4 stat-number text-teal font-bold'>{s.fcl_level}</td>
-                    <td className='py-3 px-4 stat-number text-muted text-sm'>{s.accuracy}%</td>
-                    <td className='py-3 px-4 stat-number text-muted text-sm'>{s.hint_density}</td>
-                    <td className='py-3 px-4'>{s.is_at_risk?<span className='badge-red'>At Risk</span>:<span className='badge-green'>On Track</span>}</td>
-                    <td className='py-3 px-4'><div className='flex gap-2'>
-                      <button onClick={()=>openStudentDetail(s.student_id)} className='btn-ghost text-xs py-1 px-2'>View</button>
-                      <button onClick={()=>{ setTab('Messages'); }} className='btn-primary text-xs py-1 px-2'>Message</button>
-                    </div></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {/* Student slide-over */}
-          {studentDetail && (
+          {loading ? (
+            <div className={styles.loading}>Loading dashboard…</div>
+          ) : (
             <>
-              <div className='fixed inset-0 bg-black/50 z-40' onClick={()=>{setSelSt(null);setDetail(null);}} />
-              <div className='fixed right-0 top-0 h-full w-96 bg-card border-l border-border z-50 overflow-y-auto'>
-                <div className='sticky top-0 bg-card border-b border-border px-5 py-4 flex justify-between items-center'>
-                  <div><h3 className='text-primary font-semibold'>{studentDetail.name}</h3></div>
-                  <button onClick={()=>{setSelSt(null);setDetail(null);}} className='text-muted hover:text-primary text-xl'>✕</button>
+              {activeTab === 'overview'    && <OverviewTab   dashboard={dashboard} struggling={struggling} subjects={subjects} />}
+              {activeTab === 'students'   && <StudentsTab    students={students} subjects={subjects} filterSubject={filterSubject} setFilterSubject={setFilterSubject} />}
+              {activeTab === 'directives' && <DirectivesTab  directives={directives} setDirectives={setDirectives} students={students} subjects={subjects} />}
+              
+              {activeTab === 'heatmap' && (
+                <div className="space-y-6">
+                  <div className="card p-4 flex items-center gap-4">
+                    <label className="text-muted text-sm">Filter by subject:</label>
+                    <select
+                      className="input w-64"
+                      value={selectedSubjectId}
+                      onChange={handleSubjectChange}
+                    >
+                      <option value="">All subjects</option>
+                      {subjects.map(sub => (
+                        <option key={sub.id} value={sub.id}>{sub.name}</option>
+                      ))}
+                    </select>
+                    <button onClick={loadHeatmap} className="btn-ghost text-sm">Refresh</button>
+                  </div>
+                  {heatmapLoading ? (
+                    <div className="card p-10 text-center text-muted">Loading heatmap…</div>
+                  ) : heatmapData && heatmapData.students?.length > 0 ? (
+                    <div className="card p-4 overflow-x-auto">
+                      <h3 className="text-primary font-semibold mb-4">Topic Mastery Heatmap</h3>
+                      <p className="text-muted text-xs mb-4">
+                        Colour: Grey = Introduced | Amber = Practising | Blue = Proficient | Green = Mastered
+                      </p>
+                      <table className="min-w-full border-collapse text-sm">
+                        <thead>
+                          <tr>
+                            <th className="p-2 text-left text-muted">Student</th>
+                            {heatmapData.topics.map(topic => (
+                              <th key={topic} className="p-2 text-left text-muted font-normal">
+                                {topic.replace(/_/g, ' ').split(' ').slice(-1)[0]}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {heatmapData.students.map((student, idx) => (
+                            <tr key={student.id} className="border-t border-border">
+                              <td className="p-2 font-medium text-primary">{student.name}</td>
+                              {heatmapData.data[idx].map((value, colIdx) => (
+                                <td key={colIdx} className="p-1">
+                                  <div
+                                    className="w-6 h-6 rounded-md"
+                                    style={{ backgroundColor: getMasteryColor(value) }}
+                                    title={`${heatmapData.topics[colIdx]}: ${['Introduced','Practising','Proficient','Mastered'][value]}`}
+                                  />
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="card p-10 text-center text-muted">No heatmap data available.</div>
+                  )}
                 </div>
-                <div className='p-5 space-y-4'>
-                  <div className='grid grid-cols-2 gap-3'>{[['Accuracy',`${studentDetail.accuracy}%`],['Hint Density',studentDetail.avg_hint_density]].map(([l,v])=><div key={l} className='bg-app rounded-lg p-3 border border-border'><div className='text-muted text-xs mb-1'>{l}</div><div className='stat-number text-primary font-bold'>{v}</div></div>)}</div>
-                  <div className='bg-amber-500/5 border border-amber-500/20 rounded-xl p-4'><h4 className='text-amber-400 text-xs font-semibold mb-2'>💡 AI Recommendations</h4><p className='text-primary text-xs leading-relaxed'>{studentDetail.ai_recommendations}</p></div>
+              )}
+
+              {activeTab === 'engagement' && (
+                <div className="card p-6">
+                  <h3 className="text-primary font-semibold mb-4">Engagement Report</h3>
+                  <p className="text-muted text-sm mb-4">
+                    Students inactive for more than {engagementData?.days_inactive || 7} days.
+                  </p>
+                  {engagementLoading ? (
+                    <div className="text-center text-muted py-10">Loading engagement data…</div>
+                  ) : engagementData && engagementData.students?.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse text-sm">
+                        <thead>
+                          <tr className="border-b border-border">
+                            <th className="p-3 text-left text-muted">Student</th>
+                            <th className="p-3 text-left text-muted">Grade</th>
+                            <th className="p-3 text-left text-muted">Email</th>
+                            <th className="p-3 text-left text-muted">Days Inactive</th>
+                            <th className="p-3 text-left text-muted">Last Activity</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {engagementData.students.map(student => (
+                            <tr key={student.student_id} className="border-b border-border/50">
+                              <td className="p-3 text-primary">{student.name}</td>
+                              <td className="p-3 text-muted">{student.grade || '—'}</td>
+                              <td className="p-3 text-muted">{student.email}</td>
+                              <td className="p-3 text-red-400 font-medium">{student.days_inactive} days</td>
+                              <td className="p-3 text-muted">
+                                {student.last_activity ? new Date(student.last_activity).toLocaleDateString() : 'Never'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="text-center text-green-400 py-10">
+                      ✅ All students are active! No one has been inactive for &gt;7 days.
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
             </>
           )}
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
 
-      {/* MESSAGES TAB */}
-      {tab==='Messages' && (
-        <div className='grid grid-cols-3 gap-4 h-96'>
-          <div className='card overflow-hidden flex flex-col'>
-            <div className='px-4 py-3 border-b border-border'><h3 className='text-primary font-semibold text-sm'>Inbox ({unread} unread)</h3></div>
-            <div className='flex-1 overflow-y-auto'>
-              {inbox.length===0&&<p className='text-muted text-sm p-4 text-center'>No messages yet</p>}
-              {inbox.map(m=>(
-                <button key={m.id} onClick={()=>setThread(m)} className={`w-full text-left px-4 py-3 border-b border-border/50 hover:bg-border/20 transition-colors ${!m.is_read?'bg-teal/5':''} ${thread?.id===m.id?'border-l-2 border-l-teal':''}`}>
-                  <div className='flex justify-between mb-1'><span className={`text-xs font-semibold ${!m.is_read?'text-primary':'text-muted'}`}>{m.sender_name}</span><span className='text-muted text-xs'>{new Date(m.created_at).toLocaleDateString()}</span></div>
-                  <div className={`text-xs truncate ${!m.is_read?'text-primary font-medium':'text-muted'}`}>{m.subject}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className='col-span-2 card flex flex-col'>
-            {thread ? (<>
-              <div className='px-5 py-4 border-b border-border'><h3 className='text-primary font-semibold'>{thread.subject}</h3><p className='text-muted text-xs'>From: {thread.sender_name}</p></div>
-              <div className='flex-1 overflow-y-auto p-5'><p className='text-primary text-sm leading-relaxed whitespace-pre-wrap'>{thread.body}</p></div>
-              <div className='border-t border-border p-4'>
-                <textarea rows={3} value={reply} onChange={e=>setReply(e.target.value)} placeholder='Type your reply...' className='w-full bg-input border border-border rounded-xl px-4 py-3 text-primary text-sm focus:border-teal/60 resize-none mb-3 focus:outline-none' />
-                <div className='flex justify-end gap-2'>
-                  <button onClick={()=>setThread(null)} className='btn-ghost text-xs'>Clear</button>
-                  <button onClick={()=>sendReply(thread.sender_id)} disabled={!reply.trim()} className='btn-primary text-xs disabled:opacity-50'>Send Reply</button>
+// ------------------------------------------------------------
+// Overview Tab
+// ------------------------------------------------------------
+function OverviewTab({ dashboard, struggling, subjects }) {
+  const s = dashboard?.stats ?? {};
+  return (
+    <div>
+      <div className={styles.statsGrid}>
+        <StatCard label="Total Students" value={s.total_students ?? '—'} icon="👥" />
+        <StatCard label="Subjects"        value={s.subjects_count ?? subjects.length} icon="📚" />
+        <StatCard label="Avg Class FCL"   value={s.avg_fcl ? `L${s.avg_fcl}` : '—'} icon="📊" />
+        <StatCard label="Struggling"      value={struggling.length} icon="⚠️" accent="warn" />
+      </div>
+
+      {struggling.length > 0 && (
+        <section className={styles.section}>
+          <h2 className={styles.sectionTitle}>Students Needing Attention</h2>
+          <div className={styles.alertList}>
+            {struggling.map(st => (
+              <div key={st.id} className={styles.alertRow}>
+                <div className={styles.alertAvatar}>{st.first_name?.[0]}{st.last_name?.[0]}</div>
+                <div>
+                  <p className={styles.alertName}>{st.first_name} {st.last_name}</p>
+                  <p className={styles.alertReason}>{st.alert_reason ?? `FCL Level ${st.fcl_level} — below class average`}</p>
                 </div>
-              </div>
-            </>) : (
-              <div className='flex-1 flex items-center justify-center text-muted'><p className='text-sm'>Select a message to read and reply</p></div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* INTERVENTIONS TAB */}
-      {tab==='Interventions' && (
-        <div className='grid grid-cols-3 gap-4'>
-          <div className='col-span-2 card'>
-            <div className='px-5 py-4 border-b border-border flex justify-between'><h3 className='text-primary font-semibold text-sm'>At-Risk Students ({at_risk.length})</h3><span className='text-muted text-xs'>{selIds.length} selected</span></div>
-            {at_risk.map(s=>(
-              <div key={s.student_id} className='px-5 py-3 border-b border-border/50 flex items-center gap-4 hover:bg-border/20 transition-colors'>
-                <input type='checkbox' checked={selIds.includes(s.student_id)} onChange={e=>setSelIds(ids=>e.target.checked?[...ids,s.student_id]:ids.filter(i=>i!==s.student_id))} className='rounded border-border bg-input accent-teal' />
-                <div className='flex-1'><div className='text-primary text-sm font-medium'>{s.name}</div><div className='text-muted text-xs'>{s.risk_reason} · {s.subject_code}</div></div>
-                <span className='badge-red'>FCL {s.fcl_level}</span>
+                <span className="badge badge-warn">FCL L{st.fcl_level}</span>
               </div>
             ))}
-            {at_risk.length===0&&<p className='text-muted text-sm p-5 text-center'>No at-risk students in your subjects</p>}
           </div>
-          <div className='card p-5 flex flex-col gap-4'>
-            <h3 className='text-primary font-semibold text-sm'>Send Groq AI Tip</h3>
-            <p className='text-muted text-xs'>Select students, choose a topic, and an AI-generated improvement tip will be sent to their notifications.</p>
-            <div><label className='text-muted text-xs block mb-1.5 uppercase'>Topic</label>
-              <select value={tipTopic} onChange={e=>setTipTopic(e.target.value)} className='w-full bg-input border border-border rounded-lg px-3 py-2 text-primary text-sm focus:border-teal/60 focus:outline-none'>
-                {['mathematics_algebra','mathematics_geometry','science_biology','science_chemistry','english_comprehension','english_writing','social_studies','computer_science'].map(t=><option key={t} value={t}>{t.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</option>)}
-              </select></div>
-            <div><label className='text-muted text-xs block mb-1.5 uppercase'>Custom Note (optional)</label>
-              <textarea rows={3} value={tipNote} onChange={e=>setTipNote(e.target.value)} placeholder='Additional context for the AI...' className='w-full bg-input border border-border rounded-lg px-3 py-2 text-primary text-sm focus:border-teal/60 resize-none focus:outline-none' /></div>
-            {tipPreview && <div className='bg-teal/5 border border-teal/20 rounded-xl p-3 text-xs text-teal'><div className='font-semibold mb-1'>Sent tip preview:</div>{tipPreview}...</div>}
-            <button onClick={sendBulkTip} disabled={!selIds.length||tipSending} className='btn-primary disabled:opacity-50 mt-auto'>{tipSending?'Generating tip...':  `Send to ${selIds.length} student${selIds.length!==1?'s':''}`}</button>
+        </section>
+      )}
+
+      <section className={styles.section} style={{ marginTop: 'var(--space-6)' }}>
+        <h2 className={styles.sectionTitle}>My Subjects</h2>
+        <div className={styles.subjectCards}>
+          {subjects.map(sub => (
+            <div key={sub.id} className={styles.subjectCard}>
+              <p className={styles.subjectName}>{sub.name}</p>
+              <p className={styles.subjectMeta}>Grade {sub.grade_level} · {sub.student_count ?? 0} students</p>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Students Tab
+// ------------------------------------------------------------
+function StudentsTab({ students, subjects, filterSubject, setFilterSubject }) {
+  const filtered = filterSubject
+    ? students.filter(s => s.subject_ids?.includes(Number(filterSubject)))
+    : students;
+  return (
+    <div>
+      <div className={styles.tableControls}>
+        <select
+          className="input"
+          style={{ maxWidth: 220 }}
+          value={filterSubject}
+          onChange={e => setFilterSubject(e.target.value)}
+        >
+          <option value="">All subjects</option>
+          {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <span className={styles.count}>{filtered.length} students</span>
+      </div>
+      <div className={styles.tableWrap}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Student</th>
+              <th>FCL Level</th>
+              <th>VARK</th>
+              <th>Quizzes</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(st => (
+              <tr key={st.id}>
+                <td>
+                  <div className={styles.studentCell}>
+                    <div className={styles.smallAvatar}>{st.first_name?.[0]}{st.last_name?.[0]}</div>
+                    <div>
+                      <p className={styles.studentName}>{st.first_name} {st.last_name}</p>
+                      <p className={styles.studentEmail}>{st.email}</p>
+                    </div>
+                  </div>
+                </td>
+                <td><span className={`fcl-badge fcl-${st.fcl_level ?? 1}`}>L{st.fcl_level ?? 1}</span></td>
+                <td><span className={styles.varkPill}>{st.dominant_vark ?? '—'}</span></td>
+                <td className={styles.quizCount}>{st.quizzes_completed ?? 0}</td>
+                <td>
+                  <span className={`badge ${st.is_struggling ? 'badge-warn' : 'badge-success'}`}>
+                    {st.is_struggling ? 'Needs help' : 'On track'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={5} className={styles.empty}>No students found</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Directives Tab
+// ------------------------------------------------------------
+function DirectivesTab({ directives, setDirectives, students, subjects }) {
+  const [form, setForm]       = useState({ student_id: '', subject_id: '', instruction: '' });
+  const [saving, setSaving]   = useState(false);
+  const [msg, setMsg]         = useState('');
+
+  const handleSave = async () => {
+    if (!form.instruction.trim()) return;
+    setSaving(true);
+    try {
+      const saved = await upsertDirective(form);
+      setDirectives(prev => {
+        const idx = prev.findIndex(d => d.student_id === saved.student_id && d.subject_id === saved.subject_id);
+        if (idx >= 0) { const copy = [...prev]; copy[idx] = saved; return copy; }
+        return [...prev, saved];
+      });
+      setMsg('Directive saved!');
+      setTimeout(() => setMsg(''), 2500);
+    } catch { setMsg('Save failed'); }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id) => {
+    await deleteDirective(id);
+    setDirectives(prev => prev.filter(d => d.id !== id));
+  };
+
+  return (
+    <div>
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>New AI Directive</h2>
+        <p className={styles.directiveHelp}>
+          AI directives are custom instructions the tutor AI follows when helping a specific student. 
+          Leave student/subject blank to apply globally.
+        </p>
+        <div className={styles.directiveForm}>
+          <select className="input" value={form.student_id} onChange={e => setForm(p => ({ ...p, student_id: e.target.value }))}>
+            <option value="">All students</option>
+            {students.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name}</option>)}
+          </select>
+          <select className="input" value={form.subject_id} onChange={e => setForm(p => ({ ...p, subject_id: e.target.value }))}>
+            <option value="">All subjects</option>
+            {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <textarea
+            className={`input ${styles.directiveTextarea}`}
+            placeholder="e.g. Always use visual diagrams when explaining math. Avoid long text blocks. Praise effort before correcting mistakes."
+            value={form.instruction}
+            onChange={e => setForm(p => ({ ...p, instruction: e.target.value }))}
+            rows={4}
+          />
+          <div className={styles.directiveActions}>
+            {msg && <span className={styles.msg}>{msg}</span>}
+            <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving…' : 'Save Directive'}
+            </button>
           </div>
         </div>
-      )}
-    </PageShell>
+      </section>
+      <section className={styles.section} style={{ marginTop: 'var(--space-6)' }}>
+        <h2 className={styles.sectionTitle}>Active Directives</h2>
+        <div className={styles.directiveList}>
+          {directives.length === 0 && <p className={styles.empty}>No directives yet</p>}
+          {directives.map(d => {
+            const st  = students.find(s => s.id === d.student_id);
+            const sub = subjects.find(s => s.id === d.subject_id);
+            return (
+              <div key={d.id} className={styles.directiveItem}>
+                <div className={styles.directiveMeta}>
+                  <span className="badge badge-accent">{st ? `${st.first_name} ${st.last_name}` : 'All students'}</span>
+                  <span className="badge badge-accent">{sub ? sub.name : 'All subjects'}</span>
+                </div>
+                <p className={styles.directiveText}>{d.instruction}</p>
+                <button className={styles.deleteBtn} onClick={() => handleDelete(d.id)}>✕ Remove</button>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Shared Components
+// ------------------------------------------------------------
+function StatCard({ label, value, icon, accent }) {
+  return (
+    <div className={`card ${styles.statCard}`}>
+      <span className={styles.statIcon}>{icon}</span>
+      <p className={styles.statValue} style={accent === 'warn' ? { color: 'var(--accent-warn)' } : {}}>{value}</p>
+      <p className={styles.statLabel}>{label}</p>
+    </div>
   );
 }

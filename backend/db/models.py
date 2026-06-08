@@ -34,48 +34,6 @@ class FclPointTransaction(Base):
     source_id  = Column(String(200))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-class StudentSubjectStyle(Base):
-    __tablename__ = 'student_subject_style'
-    id             = Column(Integer, primary_key=True, index=True)
-    student_id     = Column(Integer, ForeignKey('students.id'), nullable=False)
-    subject_id     = Column(Integer, ForeignKey('subjects.id'), nullable=False)
-    learning_style = Column(String(30), default='reading')
-    confidence     = Column(Float, default=0.5)
-    auto_detected  = Column(Boolean, default=False)
-    updated_at     = Column(DateTime(timezone=True), server_default=func.now())
-    __table_args__ = (UniqueConstraint('student_id', 'subject_id'),)
-
-class StyleInteraction(Base):
-    __tablename__ = 'style_interactions'
-    id         = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey('students.id'), nullable=False)
-    subject_id = Column(Integer, ForeignKey('subjects.id'), nullable=False)
-    modality   = Column(String(30), nullable=False)
-    source     = Column(String(50), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-class LibraryContent(Base):
-    __tablename__ = 'library_content'
-    id           = Column(Integer, primary_key=True, index=True)
-    teacher_id   = Column(Integer, ForeignKey('students.id'), nullable=False)
-    subject_id   = Column(Integer, ForeignKey('subjects.id'), nullable=False)
-    title        = Column(String(300), nullable=False)
-    description  = Column(Text)
-    content_type = Column(String(50), nullable=False)
-    file_data    = Column(Text)
-    grade_min    = Column(Integer, default=1)
-    grade_max    = Column(Integer, default=19)
-    uploaded_at  = Column(DateTime(timezone=True), server_default=func.now())
-    is_published = Column(Boolean, default=True)
-
-class LibrarySession(Base):
-    __tablename__ = 'library_sessions'
-    id            = Column(Integer, primary_key=True, index=True)
-    student_id    = Column(Integer, ForeignKey('students.id'), nullable=False)
-    content_id    = Column(Integer, ForeignKey('library_content.id'), nullable=False)
-    started_at    = Column(DateTime(timezone=True), server_default=func.now())
-    ended_at      = Column(DateTime(timezone=True))
-    ai_tutor_used = Column(Boolean, default=False)
 class Student(Base):
     __tablename__ = 'students'
     id            = Column(Integer, primary_key=True, index=True)
@@ -96,6 +54,7 @@ class Student(Base):
     sessions            = relationship('ConversationSession', back_populates='student')
     topic_mastery       = relationship('TopicMastery', back_populates='student')
     assessments         = relationship('Assessment', back_populates='student')
+    is_admin            = Column(Boolean, default=False)
 
 class StudentSubject(Base):
     __tablename__ = 'student_subjects'
@@ -230,6 +189,7 @@ class Notification(Base):
     is_read    = Column(Boolean, default=False)
     action_url = Column(String(300))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 class LLMApiLog(Base):
     __tablename__ = 'llm_api_logs'
     id         = Column(Integer, primary_key=True, index=True)
@@ -241,42 +201,6 @@ class LLMApiLog(Base):
     latency_ms = Column(Integer)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-# New tables for the hierarchical points-based FCL system
-
-class TopicFcl(Base):
-    __tablename__ = 'topic_fcl'
-    id            = Column(Integer, primary_key=True, index=True)
-    student_id    = Column(Integer, ForeignKey('students.id'), nullable=False)
-    subject_id    = Column(Integer, ForeignKey('subjects.id'), nullable=False)
-    topic_id      = Column(String(100), nullable=False)
-    total_points  = Column(Integer, default=0)
-    current_fcl   = Column(Integer, default=1)
-    last_updated  = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    __table_args__ = (UniqueConstraint('student_id', 'subject_id', 'topic_id'),)
-
-class TopicPointTransaction(Base):
-    __tablename__ = 'topic_point_transactions'
-    id           = Column(Integer, primary_key=True, index=True)
-    student_id   = Column(Integer, ForeignKey('students.id'), nullable=False)
-    subject_id   = Column(Integer, ForeignKey('subjects.id'), nullable=False)
-    topic_id     = Column(String(100), nullable=False)
-    points       = Column(Integer, nullable=False)
-    reason       = Column(String(200), nullable=False)
-    source_id    = Column(String(200))
-    created_at   = Column(DateTime(timezone=True), server_default=func.now())
-
-class ActiveSession(Base):
-    __tablename__ = 'active_sessions'
-    id             = Column(Integer, primary_key=True, index=True)
-    student_id     = Column(Integer, ForeignKey('students.id'), nullable=False)
-    session_type   = Column(String(50), nullable=False)   # 'tutor' or 'library'
-    topic_id       = Column(String(100), nullable=False)
-    subject_id     = Column(Integer, ForeignKey('subjects.id'), nullable=False)
-    start_time     = Column(DateTime(timezone=True), server_default=func.now())
-    last_heartbeat = Column(DateTime(timezone=True), server_default=func.now())
-    total_seconds  = Column(Integer, default=0)
-    ended          = Column(Boolean, default=False)
-
 class TeacherAward(Base):
     __tablename__ = 'teacher_awards'
     id           = Column(Integer, primary_key=True, index=True)
@@ -287,3 +211,145 @@ class TeacherAward(Base):
     points       = Column(Integer, nullable=False)
     reason       = Column(Text)
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    
+class TeacherAssignment(Base):
+    __tablename__ = 'teacher_assignments'
+    id         = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey('students.id'), nullable=False)
+    subject_id = Column(Integer, ForeignKey('subjects.id'), nullable=False)
+    grade_min  = Column(Integer, nullable=False)
+    grade_max  = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (UniqueConstraint('teacher_id', 'subject_id', 'grade_min', 'grade_max'),)
+
+    teacher = relationship('Student', foreign_keys=[teacher_id])
+    subject = relationship('Subject')
+
+class TopicFcl(Base):
+    __tablename__ = 'topic_fcl'
+    id           = Column(Integer, primary_key=True, index=True)
+    student_id   = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    subject_id   = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    topic_id     = Column(String(200), nullable=False)
+    total_points = Column(Integer, default=0)
+    current_fcl  = Column(Integer, default=1)
+    updated_at   = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    __table_args__ = (UniqueConstraint('student_id', 'subject_id', 'topic_id'),)
+
+class TopicPointTransaction(Base):
+    __tablename__ = 'topic_point_transactions'
+    id         = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    subject_id = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    topic_id   = Column(String(200), nullable=False)
+    points     = Column(Integer, nullable=False)
+    reason     = Column(String(300))
+    source_id  = Column(String(200))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class ActiveSession(Base):
+    __tablename__ = 'active_sessions'
+    id              = Column(Integer, primary_key=True, index=True)
+    student_id      = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    subject_id      = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    topic_id        = Column(String(200))
+    session_type    = Column(String(50), nullable=False)
+    started_at      = Column(DateTime(timezone=True), server_default=func.now())
+    last_heartbeat  = Column(DateTime(timezone=True), server_default=func.now())
+    ended_at        = Column(DateTime(timezone=True))
+    total_minutes   = Column(Integer, default=0)
+
+class TeacherAiDirective(Base):
+    __tablename__ = 'teacher_ai_directives'
+    id         = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    student_id = Column(Integer, ForeignKey('students.id', ondelete='SET NULL'), nullable=True)
+    subject_id = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    grade_min  = Column(Integer)
+    grade_max  = Column(Integer)
+    directive  = Column(Text, nullable=False)
+    label      = Column(String(200))
+    is_active  = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class StudentSubjectStyle(Base):
+    __tablename__ = 'student_subject_style'
+    id             = Column(Integer, primary_key=True, index=True)
+    student_id     = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    subject_id     = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    learning_style = Column(String(30), default='reading')
+    confidence     = Column(Float, default=0.5)
+    auto_detected  = Column(Boolean, default=False)
+    updated_at     = Column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (UniqueConstraint('student_id', 'subject_id'),)
+
+class StyleInteraction(Base):
+    __tablename__ = 'style_interactions'
+    id         = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    subject_id = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    modality   = Column(String(30), nullable=False)
+    source     = Column(String(50), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class LibraryContent(Base):
+    __tablename__ = 'library_content'
+    id           = Column(Integer, primary_key=True, index=True)
+    teacher_id   = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    subject_id   = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    title        = Column(String(300), nullable=False)
+    description  = Column(Text)
+    content_type = Column(String(50), nullable=False)
+    file_data    = Column(Text)
+    grade        = Column(Integer, nullable=False, default=1)   # single grade
+    is_published = Column(Boolean, default=True)
+    uploaded_at  = Column(DateTime(timezone=True), server_default=func.now())
+class LibrarySession(Base):
+    __tablename__ = 'library_sessions'
+    id            = Column(Integer, primary_key=True, index=True)
+    student_id    = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    content_id    = Column(Integer, ForeignKey('library_content.id', ondelete='CASCADE'), nullable=False)
+    started_at    = Column(DateTime(timezone=True), server_default=func.now())
+    ended_at      = Column(DateTime(timezone=True))
+    ai_tutor_used = Column(Boolean, default=False)
+
+class TeacherGradeAssignment(Base):
+    __tablename__ = 'teacher_grade_assignments'
+    id         = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    subject_id = Column(Integer, ForeignKey('subjects.id', ondelete='CASCADE'), nullable=False)
+    grade_min  = Column(Integer, nullable=False)
+    grade_max  = Column(Integer, nullable=False)
+    __table_args__ = (UniqueConstraint('teacher_id', 'subject_id', 'grade_min', 'grade_max'),)
+
+class TeacherPointAward(Base):
+    __tablename__ = 'teacher_point_awards'
+    id         = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey('students.id'), nullable=False)
+    student_id = Column(Integer, ForeignKey('students.id'), nullable=False)
+    subject_id = Column(Integer, ForeignKey('subjects.id'), nullable=False)
+    points     = Column(Integer, nullable=False)
+    reason     = Column(Text)
+    awarded_at = Column(DateTime(timezone=True), server_default=func.now())
+
+# ==================== NEW TABLES FOR PERSONALISATION ====================
+
+class ComprehensionEvent(Base):
+    __tablename__ = 'comprehension_events'
+    id          = Column(Integer, primary_key=True, index=True)
+    student_id  = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    session_id  = Column(Integer, ForeignKey('conversation_sessions.id', ondelete='SET NULL'), nullable=True)
+    event_type  = Column(String(50), nullable=False)   # ADVANCE, HOLD, STEP_BACK, HINT_SPIKE, FCL_UP, etc.
+    title       = Column(String(200), nullable=False)
+    message     = Column(Text, nullable=False)
+    tier_before = Column(Integer, nullable=True)
+    tier_after  = Column(Integer, nullable=True)
+    trigger     = Column(String(200), nullable=True)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+class MoodLog(Base):
+    __tablename__ = 'mood_logs'
+    id          = Column(Integer, primary_key=True, index=True)
+    student_id  = Column(Integer, ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    mood        = Column(String(30), nullable=False)   # happy, neutral, sad, stressed, energetic
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())

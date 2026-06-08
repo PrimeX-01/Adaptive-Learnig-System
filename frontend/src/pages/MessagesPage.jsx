@@ -1,48 +1,100 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import PageShell from '../components/PageShell';
 import api from '../services/api';
 
 export default function MessagesPage() {
+  const { user, isAuthenticated } = useAuth();
   const [params] = useSearchParams();
-  const [view,   setView]  = useState(params.get('compose')?'compose':'inbox');
-  const [inbox,  setInbox] = useState([]);
-  const [sent,   setSent]  = useState([]);
-  const [thread, setThread]= useState(null);
-  const [contacts,setContacts]=useState([]);  // teachers for students; students for teachers
-  const [toId,   setToId]  = useState('');
-  const [subj,   setSubj]  = useState('');
-  const [body,   setBody]  = useState('');
-  const [reply,  setReply] = useState('');
-  const [sending,setSending]=useState(false);
-  const [success,setSuccess]=useState(false);
-  const sid = window.__studentId;
-  const isTeacher = window.__isTeacher;
+  const [view, setView] = useState(params.get('compose')?'compose':'inbox');
+  const [inbox, setInbox] = useState([]);
+  const [sent, setSent] = useState([]);
+  const [thread, setThread] = useState(null);
+  const [recipientFilter, setRecipientFilter] = useState('all'); // 'all', 'teachers', 'classmates'
+  const [recipients, setRecipients] = useState([]); // filtered list
+  const [allTeachers, setAllTeachers] = useState([]);
+  const [allClassmates, setAllClassmates] = useState([]);
+  const [toId, setToId] = useState('');
+  const [subj, setSubj] = useState('');
+  const [body, setBody] = useState('');
+  const [reply, setReply] = useState('');
+  const [sending, setSending] = useState(false);
+  const [success, setSuccess] = useState(false);
+  
+  const sid = user?.id || localStorage.getItem('sa_studentId');
+  const isTeacher = user?.role === 'teacher' || localStorage.getItem('sa_isTeacher') === 'true';
 
-  const loadMessages = async () => {
-    const [ib, st] = await Promise.all([api.get(`/api/messages/inbox/${sid}`), api.get(`/api/messages/sent/${sid}`)]);
-    setInbox(ib.data); setSent(st.data);
-  };
+  // Load messages and recipient lists
+  useEffect(() => {
+    if (!sid) return;
+    async function loadData() {
+      const [ib, st] = await Promise.all([
+        api.get(`/api/messages/inbox/${sid}`),
+        api.get(`/api/messages/sent/${sid}`)
+      ]);
+      setInbox(ib.data);
+      setSent(st.data);
+
+      // Load teachers and classmates
+      if (!isTeacher) {
+        // Get enrolled subjects to find teachers and classmates
+        const subjectsRes = await api.get(`/api/subjects/enrolled/${sid}`);
+        const subjects = subjectsRes.data || [];
+        const teacherIds = [...new Set(subjects.map(s => s.teacher_id).filter(Boolean))];
+        const teacherPromises = teacherIds.map(id => api.get(`/api/students/${id}/profile`).catch(() => null));
+        const teacherProfiles = (await Promise.all(teacherPromises)).filter(p => p && p.data);
+        const teachers = teacherProfiles.map(p => ({ id: p.data.id, name: p.data.name, type: 'teacher' }));
+
+        // Get classmates: students enrolled in same subjects
+        const subjectIds = subjects.map(s => s.subject_id);
+        const classmatesSet = new Set();
+        for (const subjId of subjectIds) {
+          const studentsRes = await api.get(`/api/subjects/enrolled-students/${subjId}`).catch(() => ({ data: [] }));
+          for (const stu of studentsRes.data) {
+            if (stu.id != sid) classmatesSet.add({ id: stu.id, name: stu.name, type: 'classmate' });
+          }
+        }
+        const classmates = Array.from(classmatesSet.values());
+        setAllTeachers(teachers);
+        setAllClassmates(classmates);
+      } else {
+        // For teachers: load all students
+        const studentsRes = await api.get('/api/students/all');
+        const students = studentsRes.data.filter(s => !s.is_teacher).map(s => ({ id: s.id, name: s.name, type: 'student' }));
+        setAllTeachers([]);
+        setAllClassmates(students);
+      }
+    }
+    loadData();
+  }, [sid, isTeacher]);
 
   useEffect(() => {
-    loadMessages();
-    // Load contacts: students load their enrolled teachers; teachers load all students
-    if (isTeacher) {
-      api.get('/api/students/all').then(r=>setContacts(r.data.filter(s=>!s.is_teacher)));
+    // Apply filter
+    if (recipientFilter === 'teachers') {
+      setRecipients(allTeachers);
+    } else if (recipientFilter === 'classmates') {
+      setRecipients(allClassmates);
     } else {
-      api.get(`/api/subjects/enrolled/${sid}`).then(r=>{
-        const teachers = r.data.filter(e=>e.teacher_id).map(e=>({id:e.teacher_id,name:e.teacher_name,subject:e.subject_name}));
-        setContacts(teachers);
-      });
+      // Combine teachers + classmates for 'all'
+      setRecipients([...allTeachers, ...allClassmates]);
     }
-  }, [sid]);
+  }, [recipientFilter, allTeachers, allClassmates]);
 
   async function sendMessage() {
-    if (!toId||!subj.trim()||!body.trim()) return;
+    if (!toId || !subj.trim() || !body.trim()) return;
     setSending(true);
-    await api.post('/api/messages/send', { receiver_id:parseInt(toId), subject:subj, body, thread_id:thread?.thread_id||thread?.id||null });
+    await api.post('/api/messages/send', { 
+      receiver_id: parseInt(toId), 
+      subject: subj, 
+      body, 
+      thread_id: thread?.thread_id || thread?.id || null 
+    });
     setSuccess(true); setSubj(''); setBody(''); setToId('');
-    await loadMessages();
+    await Promise.all([
+      api.get(`/api/messages/inbox/${sid}`).then(r => setInbox(r.data)),
+      api.get(`/api/messages/sent/${sid}`).then(r => setSent(r.data))
+    ]);
     setSending(false); setTimeout(()=>setSuccess(false),3000);
   }
 
@@ -50,18 +102,28 @@ export default function MessagesPage() {
     if (!reply.trim()) return;
     setSending(true);
     const replyTo = thread.sender_id === sid ? thread.receiver_id : thread.sender_id;
-    await api.post('/api/messages/send', { receiver_id:replyTo, subject:`Re: ${thread.subject}`, body:reply, thread_id:thread.thread_id||thread.id });
+    await api.post('/api/messages/send', { 
+      receiver_id: replyTo, 
+      subject: `Re: ${thread.subject}`, 
+      body: reply, 
+      thread_id: thread.thread_id || thread.id 
+    });
     setReply('');
-    await loadMessages();
+    await Promise.all([
+      api.get(`/api/messages/inbox/${sid}`).then(r => setInbox(r.data)),
+      api.get(`/api/messages/sent/${sid}`).then(r => setSent(r.data))
+    ]);
     setSending(false);
   }
 
+  if (!sid) return <div className='min-h-screen bg-app flex items-center justify-center'><Link to="/auth">Please log in</Link></div>;
+
   const unread = inbox.filter(m=>!m.is_read).length;
+  const uniqueRecipients = recipients.filter((v,i,a)=>a.findIndex(t=>t.id===v.id)===i);
 
   return (
     <PageShell title='Messages' subtitle={`${unread} unread`} unreadCount={unread}>
       <div className='flex gap-4 h-[calc(100vh-8rem)]'>
-        {/* Left: thread list */}
         <div className='w-72 flex-shrink-0 card flex flex-col overflow-hidden'>
           <div className='flex border-b border-border'>
             {['inbox','sent','compose'].map(t=>(
@@ -86,7 +148,6 @@ export default function MessagesPage() {
             ))}
           </div>
         </div>
-        {/* Right: content */}
         <div className='flex-1 card flex flex-col overflow-hidden'>
           {view==='thread'&&thread&&(
             <>
@@ -103,15 +164,28 @@ export default function MessagesPage() {
               <h3 className='text-primary font-semibold mb-5'>New Message</h3>
               {success&&<div className='mb-4 px-4 py-3 bg-teal/10 border border-teal/30 rounded-xl text-teal text-sm'>Message sent successfully!</div>}
               <div className='space-y-4 flex-1'>
-                <div><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>To</label>
+                <div>
+                  <label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Filter recipients</label>
+                  <select value={recipientFilter} onChange={e=>setRecipientFilter(e.target.value)} className='w-full bg-input border border-border rounded-lg px-3 py-2.5 text-primary text-sm focus:border-teal/60 focus:outline-none'>
+                    <option value="all">All (Teachers + Classmates)</option>
+                    <option value="teachers">Teachers Only</option>
+                    <option value="classmates">Classmates Only</option>
+                  </select>
+                </div>
+                <div>
+                  <label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>To</label>
                   <select value={toId} onChange={e=>setToId(e.target.value)} className='w-full bg-input border border-border rounded-lg px-3 py-2.5 text-primary text-sm focus:border-teal/60 focus:outline-none'>
                     <option value=''>Select recipient...</option>
-                    {contacts.map(c=><option key={c.id} value={c.id}>{c.name}{c.subject?` (${c.subject})`:c.grade?` (Grade ${c.grade})`:''}</option>)}
-                  </select></div>
-                <div><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Subject</label><input value={subj} onChange={e=>setSubj(e.target.value)} placeholder='What is this about?' className='w-full bg-input border border-border rounded-lg px-3 py-2.5 text-primary text-sm focus:border-teal/60 focus:outline-none' /></div>
+                    {uniqueRecipients.map(c=><option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
+                  </select>
+                </div>
+                <div><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Subject</label><input value={subj} onChange={e=>setSubj(e.target.value)} placeholder='What is this about?' className='w-full bg-input border border-border rounded-lg px-3 py-2.5 text-primary text-sm focus:outline-none' /></div>
                 <div className='flex-1'><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Message</label><textarea rows={8} value={body} onChange={e=>setBody(e.target.value)} placeholder='Write your message here...' className='w-full bg-input border border-border rounded-xl px-4 py-3 text-primary text-sm focus:border-teal/60 resize-none focus:outline-none' /></div>
               </div>
-              <div className='flex justify-between items-center mt-4 pt-4 border-t border-border'><p className='text-muted text-xs'>{isTeacher?'Student will be notified immediately':'Your teacher will be notified immediately'}</p><div className='flex gap-2'><button onClick={()=>{setSubj('');setBody('');setToId('');}} className='btn-ghost'>Clear</button><button onClick={sendMessage} disabled={!toId||!subj.trim()||!body.trim()||sending} className='btn-primary disabled:opacity-50'>{sending?'Sending...':'✉ Send Message'}</button></div></div>
+              <div className='flex justify-between items-center mt-4 pt-4 border-t border-border'>
+                <p className='text-muted text-xs'>{isTeacher?'Student will be notified immediately':'Your teacher will be notified immediately'}</p>
+                <div className='flex gap-2'><button onClick={()=>{setSubj('');setBody('');setToId('');}} className='btn-ghost'>Clear</button><button onClick={sendMessage} disabled={!toId||!subj.trim()||!body.trim()||sending} className='btn-primary disabled:opacity-50'>{sending?'Sending...':'✉ Send Message'}</button></div>
+              </div>
             </div>
           )}
           {(view==='inbox'||view==='sent')&&!thread&&(<div className='flex-1 flex flex-col items-center justify-center text-muted gap-3'><span className='text-4xl'>✉</span><p className='text-sm'>Select a message to read it</p><button onClick={()=>setView('compose')} className='btn-primary text-xs'>Compose New Message</button></div>)}

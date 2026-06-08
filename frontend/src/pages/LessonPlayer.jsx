@@ -7,6 +7,7 @@ import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
 import PageShell from '../components/PageShell';
 import api from '../services/api';
+import AudioPlayer from '../components/AudioPlayer';
 
 mermaid.initialize({
   startOnLoad: false,
@@ -21,31 +22,7 @@ mermaid.initialize({
   },
 });
 
-// ── TTS helper ──────────────────────────────────────────────────────────────
-function useTTS() {
-  const [speaking, setSpeaking] = useState(false);
-  const [rate,     setRate]     = useState(1.0);
-
-  function speak(text) {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.rate = rate;
-    utt.onstart = () => setSpeaking(true);
-    utt.onend   = () => setSpeaking(false);
-    utt.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utt);
-  }
-
-  function stop() {
-    window.speechSynthesis?.cancel();
-    setSpeaking(false);
-  }
-
-  return { speak, stop, speaking, rate, setRate };
-}
-
-// ── Mermaid renderer ─────────────────────────────────────────────────────────
+// ── Mermaid renderer ───────────────────────────────────────────
 function MermaidBlock({ code }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -60,7 +37,7 @@ function MermaidBlock({ code }) {
   return <div ref={ref} className="my-6 overflow-x-auto flex justify-center" />;
 }
 
-// ── Markdown components ──────────────────────────────────────────────────────
+// ── Markdown components (enhanced) ─────────────────────────────
 const mdComponents = {
   code({ className, children }) {
     if (className === 'language-math')   return <InlineMath math={String(children)} />;
@@ -91,69 +68,88 @@ const mdComponents = {
   ),
   strong: ({ children }) => <strong className="text-primary font-semibold">{children}</strong>,
   em:     ({ children }) => <em     className="text-muted italic">{children}</em>,
+  img: ({ src, alt }) => (
+    <img src={src} alt={alt || 'Lesson image'} className="max-w-full rounded-lg my-4 border border-border" />
+  ),
 };
 
-// ── Audio player for TTS mode ─────────────────────────────────────────────
-function AudioPlayer({ text, speak, stop, speaking, rate, setRate }) {
+// ── Visual content (images, diagrams) ─────────────────────────
+function VisualContent({ lesson }) {
   return (
-    <div className="card p-6 flex flex-col items-center gap-6">
-      <div className="w-20 h-20 rounded-full bg-teal/10 border-2 border-teal/30 flex items-center justify-center">
-        <span className="text-4xl">{speaking ? '🔊' : '🎧'}</span>
-      </div>
-      <p className="text-muted text-sm text-center max-w-md">
-        This lesson is optimised for audio. Press play to listen.
-      </p>
-      <div className="flex items-center gap-4">
-        <button
-          onClick={() => speaking ? stop() : speak(text)}
-          className={`px-8 py-3 rounded-xl font-semibold text-sm transition-all ${
-            speaking
-              ? 'bg-red-500/10 border border-red-500/40 text-red-400 hover:bg-red-500/20'
-              : 'btn-primary'
-          }`}
-        >
-          {speaking ? '⏹ Stop' : '▶ Play Lesson'}
-        </button>
-      </div>
-      <div className="flex items-center gap-3 text-xs text-muted">
-        <span>Speed:</span>
-        {[0.75, 1.0, 1.25, 1.5].map(r => (
-          <button
-            key={r}
-            onClick={() => setRate(r)}
-            className={`px-2 py-1 rounded border transition-colors ${
-              rate === r
-                ? 'border-teal bg-teal/10 text-teal'
-                : 'border-border text-muted hover:text-primary'
-            }`}
-          >
-            {r}x
-          </button>
-        ))}
-      </div>
-      {/* Show transcript */}
-      <details className="w-full">
-        <summary className="text-muted text-xs cursor-pointer hover:text-primary transition-colors">
-          Show transcript
-        </summary>
-        <div className="mt-3 p-4 bg-app border border-border rounded-xl text-primary text-sm leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto">
-          {text}
-        </div>
-      </details>
+    <div className="card p-8 space-y-6">
+      {lesson?.image_url && (
+        <img src={lesson.image_url} alt={lesson.title} className="max-w-full rounded-xl border border-border mx-auto" />
+      )}
+      {lesson?.diagram_code ? (
+        <MermaidBlock code={lesson.diagram_code} />
+      ) : lesson?.content || lesson?.body ? (
+        <ReactMarkdown rehypePlugins={[rehypeHighlight]} components={mdComponents}>
+          {lesson.content || lesson.body}
+        </ReactMarkdown>
+      ) : (
+        <p className="text-muted text-sm">No visual content available.</p>
+      )}
     </div>
   );
 }
 
-// ── Main LessonPlayer component ───────────────────────────────────────────
+// ── Audio content (transcript + player) ────────────────────────
+function AudioContent({ text }) {
+  const [showTranscript, setShowTranscript] = useState(false);
+  return (
+    <div className="card p-6 space-y-6">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-20 h-20 rounded-full bg-teal/10 border-2 border-teal/30 flex items-center justify-center">
+          <span className="text-4xl">🎧</span>
+        </div>
+        <p className="text-muted text-sm text-center max-w-md">
+          This lesson is optimised for audio. Click the button below to listen.
+        </p>
+        <AudioPlayer text={text} label="▶ Play Lesson" />
+        <button
+          onClick={() => setShowTranscript(!showTranscript)}
+          className="btn-ghost text-xs"
+        >
+          {showTranscript ? 'Hide transcript' : 'Show transcript'}
+        </button>
+        {showTranscript && (
+          <div className="mt-4 p-4 bg-app border border-border rounded-xl text-primary text-sm leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto w-full">
+            {text}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Loading skeleton ───────────────────────────────────────────
+function LessonSkeleton() {
+  return (
+    <div className="max-w-3xl mx-auto animate-pulse">
+      <div className="card p-6 mb-6">
+        <div className="h-6 bg-border rounded w-1/3 mb-2" />
+        <div className="h-4 bg-border rounded w-1/2" />
+      </div>
+      <div className="card p-8">
+        <div className="space-y-3">
+          <div className="h-4 bg-border rounded w-full" />
+          <div className="h-4 bg-border rounded w-5/6" />
+          <div className="h-4 bg-border rounded w-4/6" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main LessonPlayer ──────────────────────────────────────────
 export default function LessonPlayer() {
-  const { id }   = useParams();
-  const nav      = useNavigate();
-  const [lesson,  setLesson]  = useState(null);
+  const { id } = useParams();
+  const nav = useNavigate();
+  const [lesson, setLesson] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState('');
-  const [progress,setProgress]= useState(0); // read progress 0–100
+  const [error, setError] = useState('');
+  const [progress, setProgress] = useState(0);
   const contentRef = useRef(null);
-  const { speak, stop, speaking, rate, setRate } = useTTS();
   const sid = window.__studentId;
 
   useEffect(() => {
@@ -163,10 +159,10 @@ export default function LessonPlayer() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  // Track read progress via scroll
+  // Track read progress (only for text/visual)
   useEffect(() => {
     const el = contentRef.current;
-    if (!el) return;
+    if (!el || lesson?.modality === 'audio') return;
     function onScroll() {
       const { scrollTop, scrollHeight, clientHeight } = el;
       const pct = scrollHeight <= clientHeight
@@ -178,7 +174,6 @@ export default function LessonPlayer() {
     return () => el.removeEventListener('scroll', onScroll);
   }, [lesson]);
 
-  // Mark complete when progress reaches 90%
   useEffect(() => {
     if (progress >= 90 && lesson && sid) {
       api.post(`/api/content/${id}/complete`, { student_id: sid }).catch(() => {});
@@ -186,57 +181,64 @@ export default function LessonPlayer() {
   }, [progress, lesson, id, sid]);
 
   const modalityLabel = {
-    text:   'Reading',
+    text: 'Reading',
     visual: 'Visual',
-    audio:  'Audio',
+    audio: 'Audio',
   };
-
   const modalityIcon = {
-    text:   '📖',
+    text: '📖',
     visual: '🗺',
-    audio:  '🎧',
+    audio: '🎧',
   };
 
-  if (loading) return (
-    <div className="min-h-screen bg-app flex items-center justify-center">
-      <div className="w-10 h-10 border-4 border-teal/30 border-t-teal rounded-full animate-spin" />
-    </div>
-  );
-
-  if (error) return (
-    <PageShell title="Lesson" subtitle="Content Library">
-      <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 max-w-lg">
-        <p className="text-red-400 text-sm">{error}</p>
-        <button onClick={() => nav('/library')} className="btn-ghost text-xs mt-4">
-          ← Back to Library
-        </button>
-      </div>
-    </PageShell>
-  );
+  if (loading) return <LessonSkeleton />;
+  if (error) {
+    return (
+      <PageShell title="Lesson" subtitle="Content Library">
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-6 max-w-lg">
+          <p className="text-red-400 text-sm">{error}</p>
+          <button onClick={() => nav('/library')} className="btn-ghost text-xs mt-4">
+            ← Back to Library
+          </button>
+        </div>
+      </PageShell>
+    );
+  }
 
   const actions = (
     <div className="flex items-center gap-3">
-      {/* Progress pill */}
-      <div className="flex items-center gap-2 text-xs text-muted">
-        <div className="w-24 h-1.5 bg-border rounded-full overflow-hidden">
-          <div
-            className="h-full bg-teal rounded-full transition-all duration-300"
-            style={{ width: `${progress}%` }}
-          />
+      {lesson?.modality !== 'audio' && (
+        <div className="flex items-center gap-2 text-xs text-muted">
+          <div className="w-24 h-1.5 bg-border rounded-full overflow-hidden">
+            <div className="h-full bg-teal rounded-full transition-all duration-300" style={{ width: `${progress}%` }} />
+          </div>
+          <span className="stat-number">{progress}%</span>
         </div>
-        <span className="stat-number">{progress}%</span>
-      </div>
-      {lesson?.modality === 'text' && (
-        <>
-          {speaking
-            ? <button onClick={stop} className="btn-ghost text-xs">⏹ Stop</button>
-            : <button onClick={() => speak(lesson.content || lesson.body || '')} className="btn-ghost text-xs">🔊 Read aloud</button>
-          }
-        </>
       )}
       <button onClick={() => nav('/library')} className="btn-ghost text-xs">← Library</button>
     </div>
   );
+
+  const renderContent = () => {
+    switch (lesson?.modality) {
+      case 'visual':
+        return <VisualContent lesson={lesson} />;
+      case 'audio':
+        return <AudioContent text={lesson?.content || lesson?.body || lesson?.transcript || ''} />;
+      default:
+        return (
+          <div ref={contentRef} className="card p-8 max-h-[60vh] overflow-y-auto prose-invert">
+            {lesson?.content || lesson?.body ? (
+              <ReactMarkdown rehypePlugins={[rehypeHighlight]} components={mdComponents}>
+                {lesson.content || lesson.body}
+              </ReactMarkdown>
+            ) : (
+              <p className="text-muted text-sm">No content available for this lesson.</p>
+            )}
+          </div>
+        );
+    }
+  };
 
   return (
     <PageShell
@@ -245,8 +247,7 @@ export default function LessonPlayer() {
       actions={actions}
     >
       <div className="max-w-3xl mx-auto">
-
-        {/* Lesson header card */}
+        {/* Header card */}
         <div className="card p-6 mb-6">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -256,99 +257,26 @@ export default function LessonPlayer() {
                 <span className="text-muted text-xs">FCL {lesson?.difficulty_level}</span>
               </div>
               <h1 className="text-primary font-bold text-xl mb-1">{lesson?.title}</h1>
-              {lesson?.description && (
-                <p className="text-muted text-sm">{lesson.description}</p>
-              )}
+              {lesson?.description && <p className="text-muted text-sm">{lesson.description}</p>}
             </div>
-            <div className="text-4xl flex-shrink-0">
-              {modalityIcon[lesson?.modality] || '📖'}
-            </div>
+            <div className="text-4xl flex-shrink-0">{modalityIcon[lesson?.modality] || '📖'}</div>
           </div>
         </div>
 
-        {/* ── TEXT modality ── */}
-        {(!lesson?.modality || lesson?.modality === 'text') && (
-          <div
-            ref={contentRef}
-            className="card p-8 max-h-[60vh] overflow-y-auto prose-invert"
-          >
-            {lesson?.content || lesson?.body ? (
-              <ReactMarkdown
-                rehypePlugins={[rehypeHighlight]}
-                components={mdComponents}
-              >
-                {lesson.content || lesson.body}
-              </ReactMarkdown>
-            ) : (
-              <p className="text-muted text-sm">No content available for this lesson.</p>
-            )}
-          </div>
-        )}
+        {renderContent()}
 
-        {/* ── VISUAL modality ── */}
-        {lesson?.modality === 'visual' && (
-          <div className="card p-8">
-            {lesson?.diagram_code ? (
-              <MermaidBlock code={lesson.diagram_code} />
-            ) : lesson?.content || lesson?.body ? (
-              <ReactMarkdown
-                rehypePlugins={[rehypeHighlight]}
-                components={mdComponents}
-              >
-                {lesson.content || lesson.body}
-              </ReactMarkdown>
-            ) : (
-              <p className="text-muted text-sm">No visual content available.</p>
-            )}
-          </div>
-        )}
-
-        {/* ── AUDIO modality ── */}
-        {lesson?.modality === 'audio' && (
-          <AudioPlayer
-            text={lesson?.content || lesson?.body || lesson?.transcript || ''}
-            speak={speak}
-            stop={stop}
-            speaking={speaking}
-            rate={rate}
-            setRate={setRate}
-          />
-        )}
-
-        {/* ── Navigation footer ── */}
+        {/* Navigation footer */}
         <div className="mt-6 flex items-center justify-between">
-          <button
-            onClick={() => nav('/library')}
-            className="btn-ghost text-sm"
-          >
-            ← Back to Library
-          </button>
+          <button onClick={() => nav('/library')} className="btn-ghost text-sm">← Back to Library</button>
           <div className="flex gap-3">
-            <button
-              onClick={() => nav('/quiz?topic=' + (lesson?.topic || ''))}
-              className="btn-ghost text-sm"
-            >
+            <button onClick={() => nav(`/quiz?topic=${lesson?.topic || ''}`)} className="btn-ghost text-sm">
               ◎ Take Quiz on this Topic
             </button>
-            <button
-              onClick={() => nav('/chat?topic=' + (lesson?.topic || ''))}
-              className="btn-primary text-sm"
-            >
+            <button onClick={() => nav(`/chat?topic=${lesson?.topic || ''}`)} className="btn-primary text-sm">
               ◈ Ask AI Tutor
             </button>
           </div>
         </div>
-
-        {/* ── Help link ── */}
-        <div className="mt-4 text-center">
-          <button
-            onClick={() => nav('/messages?compose=true')}
-            className="text-muted text-xs hover:text-teal transition-colors"
-          >
-            Need help? Message your teacher →
-          </button>
-        </div>
-
       </div>
     </PageShell>
   );

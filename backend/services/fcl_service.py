@@ -1,24 +1,29 @@
 from sqlalchemy.orm import Session
 from db.models import Student, StudentSubject, Subject, TopicFcl, TopicPointTransaction, ActiveSession, TeacherAward
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Grade to initial overall FCL mapping (as per approved table)
+# ── Grade to Overall FCL (now 1‑20) ─────────────────────────────
 GRADE_TO_FCL = {
-    1: 1, 2: 1, 3: 2, 4: 3, 5: 3, 6: 4, 7: 5,
-    8: 6, 9: 7, 10: 8, 11: 9, 12: 10,
-    13: 10, 14: 10, 15: 11, 16: 12, 17: 12,   # Undergraduate levels 1-5
-    18: 13, 19: 13   # Masters, PhD
+    1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
+    8: 8, 9: 9, 10: 10, 11: 11, 12: 12,
+    13: 13,  # Undergraduate Level 1
+    14: 14,  # Level 2
+    15: 15,  # Level 3
+    16: 16,  # Level 4
+    17: 17,  # Level 5
+    18: 18,  # Masters (coursework)
+    19: 19,  # Masters (dissertation / year 2)
+    20: 20,  # PhD
 }
 
 def grade_to_initial_fcl(grade: int) -> int:
-    """Return overall FCL based on grade mapping."""
+    """Return overall FCL based on grade mapping (capped 1-20)."""
     return GRADE_TO_FCL.get(grade, 5)
 
-def get_or_create_topic_fcl(student_id: int, subject_id: int, topic_id: str, db: Session):
-    """Return topic FCL record (create with initial overall FCL if missing)."""
+def get_or_create_topic_fcl(student_id: int, subject_id: int, topic_id: str, db: Session) -> TopicFcl:
     record = db.query(TopicFcl).filter(
         TopicFcl.student_id == student_id,
         TopicFcl.subject_id == subject_id,
@@ -27,7 +32,6 @@ def get_or_create_topic_fcl(student_id: int, subject_id: int, topic_id: str, db:
     if record:
         return record
 
-    # Determine initial overall FCL from grade
     student = db.query(Student).filter(Student.id == student_id).first()
     overall_fcl = grade_to_initial_fcl(student.grade) if student and student.grade else 5
     initial_points = overall_fcl * 1000
@@ -44,18 +48,15 @@ def get_or_create_topic_fcl(student_id: int, subject_id: int, topic_id: str, db:
     return new_record
 
 def get_topic_fcl(student_id: int, subject_id: int, topic_id: str, db: Session) -> int:
-    """Return current FCL for a topic (integer)."""
     record = get_or_create_topic_fcl(student_id, subject_id, topic_id, db)
     return record.current_fcl
 
 def get_subject_fcl(student_id: int, subject_id: int, db: Session) -> float:
-    """Compute subject FCL = average of its topic FCLs. If no topics, return grade-based FCL."""
     topics = db.query(TopicFcl).filter(
         TopicFcl.student_id == student_id,
         TopicFcl.subject_id == subject_id
     ).all()
     if not topics:
-        # No topics yet → use grade‑based FCL directly (no recursion)
         student = db.query(Student).filter(Student.id == student_id).first()
         if student and student.grade:
             return float(grade_to_initial_fcl(student.grade))
@@ -64,7 +65,6 @@ def get_subject_fcl(student_id: int, subject_id: int, db: Session) -> float:
     return round(avg, 1)
 
 def get_overall_fcl(student_id: int, db: Session) -> float:
-    """Compute overall FCL = average of subject FCLs for enrolled subjects."""
     enrollments = db.query(StudentSubject).filter(
         StudentSubject.student_id == student_id
     ).all()
@@ -80,20 +80,17 @@ def get_overall_fcl(student_id: int, db: Session) -> float:
 def award_topic_points(student_id: int, subject_id: int, topic_id: str,
                        points: int, reason: str, db: Session,
                        source_id: str = None):
-    """Award points to a topic, update total_points and current_fcl."""
     if points <= 0:
         return
     record = get_or_create_topic_fcl(student_id, subject_id, topic_id, db)
     record.total_points += points
-    # Update FCL based on new total_points: FCL = floor(total_points / 1000), capped 1-13
-    new_fcl = max(1, min(13, record.total_points // 1000))
+    new_fcl = max(1, min(20, record.total_points // 1000))
     if new_fcl != record.current_fcl:
         logger.info(f"Topic {topic_id} for student {student_id} advanced from FCL {record.current_fcl} to {new_fcl}")
         record.current_fcl = new_fcl
     record.last_updated = datetime.utcnow()
     db.add(record)
 
-    # Log transaction
     tx = TopicPointTransaction(
         student_id=student_id,
         subject_id=subject_id,

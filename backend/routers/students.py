@@ -5,11 +5,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+
 
 from db.database import get_db
 from db.models import (
     Student, StudentSubject, Assessment, StudentPreference,
-    ConversationSession, Subject, TopicFcl,          
+    ConversationSession, Subject, TopicFcl, ComprehensionEvent, MoodLog,
 )
 from auth import get_current_student
 from services.fcl_service import get_subject_fcl, get_overall_fcl, get_topic_fcl, get_or_create_topic_fcl
@@ -18,15 +20,146 @@ import logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
+# ---------- Helper ----------
+def _time_ago(dt: datetime) -> str:
+    """Convert a datetime to a human-readable 'time ago' string."""
+    if not dt:
+        return 'recently'
+    if dt.tzinfo is not None:
+        now = datetime.now(dt.tzinfo)
+    else:
+        now = datetime.utcnow()
+    diff = now - dt
+    mins = int(diff.total_seconds() / 60)
+    if mins < 1:
+        return 'just now'
+    if mins < 60:
+        return f'{mins}m ago'
+    hours = mins // 60
+    if hours < 24:
+        return f'{hours}h ago'
+    days = hours // 24
+    return f'{days}d ago'
+
+
+# ---------- Dashboard Endpoint ----------
+@router.get('/dashboard')
+def student_dashboard(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_student),
+):
+    """
+    Returns a complete snapshot of the student's dashboard.
+    This endpoint reads directly from the database each time it is called,
+    so any new quiz results or activity will be reflected immediately.
+    """
+    student_id = current_user.id
+
+    enrollments = db.query(StudentSubject).filter(
+        StudentSubject.student_id == student_id
+    ).all()
+    subjects_out = []
+    fcl_values = []
+    for e in enrollments:
+        subj = db.query(Subject).filter(Subject.id == e.subject_id).first()
+        if not subj:
+            continue
+        subject_fcl = get_subject_fcl(student_id, e.subject_id, db)
+        fcl_values.append(subject_fcl)
+        assessments = db.query(Assessment).filter(
+            Assessment.student_id == student_id,
+            Assessment.subject_id == e.subject_id,
+        ).all()
+        accuracy = (round(sum(1 for a in assessments if a.is_correct) / len(assessments) * 100, 1)
+                    if assessments else None)
+        subjects_out.append({
+            'id': e.subject_id,
+            'name': subj.name,
+            'code': subj.code,
+            'fcl_level': round(subject_fcl, 1),
+            'accuracy': accuracy,
+        })
+    all_assessments = db.query(Assessment).filter(Assessment.student_id == student_id).all()
+    topic_records = db.query(TopicFcl).filter(TopicFcl.student_id == student_id).all()
+    total_points = sum(t.total_points for t in topic_records)
+    avg_fcl = round(sum(fcl_values) / len(fcl_values), 1) if fcl_values else None
+    stats = {
+        'subjects_count': len(subjects_out),
+        'quizzes_completed': len(all_assessments),
+        'avg_fcl': avg_fcl,
+        'points': total_points,
+    }
+
+    recent_assessments = (db.query(Assessment).filter(Assessment.student_id == student_id)
+                          .order_by(Assessment.created_at.desc()).limit(40).all())
+    grouped = defaultdict(list)
+    for a in recent_assessments:
+        key = (a.topic_id, a.created_at.date() if a.created_at else 'unknown')
+        grouped[key].append(a)
+    recent_quizzes = []
+    for (topic_id, day), group in list(grouped.items())[:4]:
+        correct = sum(1 for a in group if a.is_correct)
+        score = round(correct / len(group) * 100) if group else 0
+        subj = db.query(Subject).filter(Subject.id == group[0].subject_id).first()
+        recent_quizzes.append({
+            'id': f'{topic_id}-{day}',
+            'title': topic_id.replace('_', ' ').replace('-', ' ').title(),
+            'subject_name': subj.name if subj else topic_id,
+            'score': score,
+            'created_at': group[0].created_at.isoformat() if group[0].created_at else None,
+        })
+
+    pref = db.query(StudentPreference).filter(StudentPreference.student_id == student_id).first()
+    dominant = (pref.preferred_learning_style if pref else 'reading') or 'reading'
+    style_map = {
+        'visual': {'v': 60, 'a': 15, 'r': 15, 'k': 10},
+        'auditory': {'v': 10, 'a': 60, 'r': 20, 'k': 10},
+        'reading': {'v': 15, 'a': 10, 'r': 60, 'k': 15},
+        'kinesthetic': {'v': 10, 'a': 15, 'r': 15, 'k': 60},
+    }
+    vark_profile = style_map.get(dominant, style_map['reading'])
+
+    cutoff = datetime.utcnow() - timedelta(days=7)
+    activity = []
+    sessions = (db.query(ConversationSession).filter(ConversationSession.student_id == student_id,
+                ConversationSession.started_at >= cutoff).order_by(ConversationSession.started_at.desc()).limit(5).all())
+    for s in sessions:
+        subj = (db.query(Subject).filter(Subject.id == s.subject_id).first() if s.subject_id else None)
+        activity.append({
+            'description': f'AI Tutor session{" — " + subj.name if subj else ""}',
+            'time_ago': _time_ago(s.started_at),
+        })
+    for a in recent_assessments[:5]:
+        subj = db.query(Subject).filter(Subject.id == a.subject_id).first()
+        status = 'Correct' if a.is_correct else 'Incorrect'
+        activity.append({
+            'description': f'{status} answer in {a.topic_id.replace("_", " ").title()}{" — " + subj.name if subj else ""}',
+            'time_ago': _time_ago(a.created_at),
+        })
+    activity.sort(key=lambda x: x['time_ago'])
+    activity = activity[:6]
+
+    return {
+        'stats': stats,
+        'subjects': subjects_out,
+        'recent_quizzes': recent_quizzes,
+        'vark_profile': vark_profile,
+        'recent_activity': activity,
+    }
+
+
+# ---------- Profile Endpoints ----------
 class ProfileUpdate(BaseModel):
     name: Optional[str] = None
     username: Optional[str] = None
     email: Optional[str] = None
-    grade: Optional[int] = None 
+    grade: Optional[int] = None
     age: Optional[int] = None
     bio: Optional[str] = None
-    preferred_learning_style: Optional[str] = None 
+    preferred_learning_style: Optional[str] = None
     profile_picture: Optional[str] = None
+
 
 @router.get('/{student_id}/profile')
 def get_profile(student_id: int, db: Session = Depends(get_db),
@@ -46,8 +179,9 @@ def get_profile(student_id: int, db: Session = Depends(get_db),
         'bio': s.bio,
         'profile_picture': s.profile_picture,
         'preferred_learning_style': pref.preferred_learning_style if pref else 'visual',
-        'learning_style': pref.preferred_learning_style if pref else 'visual',   # <-- ADD THIS LINE
+        'learning_style': pref.preferred_learning_style if pref else 'visual',
     }
+
 
 @router.patch('/{student_id}/profile')
 def update_profile(student_id: int, body: ProfileUpdate,
@@ -81,6 +215,7 @@ def update_profile(student_id: int, body: ProfileUpdate,
     db.refresh(s)
     return {'message': 'Profile updated successfully'}
 
+
 @router.get('/{student_id}/subject-performance')
 def subject_performance(student_id: int, db: Session = Depends(get_db),
                         current_user = Depends(get_current_student)):
@@ -92,19 +227,11 @@ def subject_performance(student_id: int, db: Session = Depends(get_db),
         subj_id = e.subject_id
         subject_fcl = get_subject_fcl(student_id, subj_id, db)
         all_fcl.append(subject_fcl)
-        assess = db.query(Assessment).filter(
-            Assessment.student_id == student_id,
-            Assessment.subject_id == subj_id
-        ).all()
+        assess = db.query(Assessment).filter(Assessment.student_id == student_id, Assessment.subject_id == subj_id).all()
         accuracy = (sum(1 for a in assess if a.is_correct) / len(assess) * 100) if assess else None
         if accuracy is not None:
             all_accuracy.append(accuracy)
-        # Count topics for this subject (any that have been initialised)
-        topics_count = db.query(TopicFcl).filter(
-            TopicFcl.student_id == student_id,
-            TopicFcl.subject_id == subj_id
-        ).count()
-        # For now, "mastered" is not used; can be implemented later.
+        topics_count = db.query(TopicFcl).filter(TopicFcl.student_id == student_id, TopicFcl.subject_id == subj_id).count()
         def label(acc):
             return ('Excellent' if acc and acc >= 80 else
                     'Good' if acc and acc >= 60 else
@@ -133,13 +260,13 @@ def subject_performance(student_id: int, db: Session = Depends(get_db),
         }
     }
 
+
 @router.get('/{student_id}/fcl-history')
 def fcl_history(student_id: int, subject_id: int = None,
                 db: Session = Depends(get_db),
                 current_user = Depends(get_current_student)):
-    # Historical FCL changes are no longer stored separately.
-    # Returning an empty list prevents frontend errors.
     return []
+
 
 @router.get('/{student_id}/topic-mastery')
 def topic_mastery(student_id: int, subject_id: int = None,
@@ -162,6 +289,7 @@ def topic_mastery(student_id: int, subject_id: int = None,
         for r in records
     ]
 
+
 @router.get('/all')
 def get_all_students(db: Session = Depends(get_db),
                      current_user = Depends(get_current_student)):
@@ -170,26 +298,22 @@ def get_all_students(db: Session = Depends(get_db),
         for s in db.query(Student).all()
     ]
 
+
 @router.get('/{student_id}/fcl/{topic_id}')
 def student_fcl_for_topic(student_id: int, topic_id: str,
                           db: Session = Depends(get_db),
                           current_user = Depends(get_current_student)):
-    # To get topic FCL, we need the subject_id. We'll look it up from the topic.
-    # We assume topic_id corresponds to a known topic in the subject_topic mapping.
-    # For simplicity, we can find the first subject that contains this topic in the topic_fcl table.
     record = db.query(TopicFcl).filter(
         TopicFcl.student_id == student_id,
         TopicFcl.topic_id == topic_id
     ).first()
-    if record:
-        fcl = record.current_fcl
-    else:
-        fcl = 5
+    fcl = record.current_fcl if record else 5
     pref = db.query(StudentPreference).filter(StudentPreference.student_id == student_id).first()
     return {
         'fcl_level': fcl,
         'preferred_modality': pref.preferred_modality if pref else 'text',
     }
+
 
 @router.get('/{student_id}/hint-analytics')
 def hint_analytics(student_id: int, db: Session = Depends(get_db),
@@ -207,6 +331,7 @@ def hint_analytics(student_id: int, db: Session = Depends(get_db),
         density = sum(a.hints_used for a in qs) / len(qs) if qs else 0
         result.append({'topic': topic.replace('_', ' ').title(), 'hint_density': density})
     return result
+
 
 @router.get('/{student_id}/activity')
 def get_activity(student_id: int, timeframe: str = 'week',
@@ -261,3 +386,68 @@ def get_activity(student_id: int, timeframe: str = 'week',
         })
     activity.sort(key=lambda x: x['timestamp'], reverse=True)
     return activity[:30]
+
+
+@router.get('/{student_id}/topic-points')
+def get_topic_points(student_id: int, subject_id: int, topic_id: str,
+                     db: Session = Depends(get_db),
+                     current_user = Depends(get_current_student)):
+    record = db.query(TopicFcl).filter(
+        TopicFcl.student_id == student_id,
+        TopicFcl.subject_id == subject_id,
+        TopicFcl.topic_id == topic_id
+    ).first()
+    if not record:
+        return {'current_points': 0, 'total_points': 0, 'current_fcl': 5, 'points_needed': 1000}
+    needed = (record.current_fcl + 1) * 1000 - record.total_points if record.current_fcl < 13 else 0
+    return {
+        'current_points': record.total_points,
+        'points_to_next_fcl': max(0, needed),
+        'current_fcl': record.current_fcl,
+    }
+
+
+# ===================== NEW PERSONALISATION ENDPOINTS =====================
+
+class MoodRequest(BaseModel):
+    mood: str
+
+
+@router.post('/mood')
+def log_mood(req: MoodRequest, db: Session = Depends(get_db),
+             current_user = Depends(get_current_student)):
+    mood_log = MoodLog(student_id=current_user.id, mood=req.mood)
+    db.add(mood_log)
+    db.commit()
+    return {'status': 'mood logged', 'mood': req.mood}
+
+
+@router.get('/{student_id}/adaptation-events')
+def get_adaptation_events(student_id: int, limit: int = 5,
+                           db: Session = Depends(get_db),
+                           current_user = Depends(get_current_student)):
+    events = db.query(ComprehensionEvent).filter(
+        ComprehensionEvent.student_id == student_id
+    ).order_by(ComprehensionEvent.created_at.desc()).limit(limit).all()
+    return [
+        {
+            'id': e.id,
+            'title': e.title,
+            'message': e.message,
+            'event_type': e.event_type,
+            'created_at': e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in events
+    ]
+
+
+@router.get('/{student_id}/assessments-count')
+def get_assessments_count(student_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_student)):
+    count = db.query(Assessment).filter(Assessment.student_id == student_id).count()
+    return count
+
+
+@router.get('/{student_id}/total-points')
+def get_total_points(student_id: int, db: Session = Depends(get_db), current_user=Depends(get_current_student)):
+    total = db.query(func.sum(TopicFcl.total_points)).filter(TopicFcl.student_id == student_id).scalar() or 0
+    return total

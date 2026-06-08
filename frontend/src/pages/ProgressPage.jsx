@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -20,8 +21,9 @@ function masteryBadge(p) {
 }
 
 export default function ProgressTracker() {
+  const { user, isAuthenticated } = useAuth();
   const navigate    = useNavigate();
-  const studentId   = window.__studentId;
+  const studentId   = user?.id || localStorage.getItem('sa_studentId');
 
   const [fclHistory,  setFclHistory]  = useState([]);
   const [mastery,     setMastery]     = useState([]);
@@ -30,6 +32,12 @@ export default function ProgressTracker() {
   const [loading,     setLoading]     = useState(true);
 
   useEffect(() => {
+    if (!studentId) {
+      if (!isAuthenticated) navigate('/auth');
+      else setLoading(false);
+      return;
+    }
+
     async function load() {
       setLoading(true);
       try {
@@ -38,24 +46,20 @@ export default function ProgressTracker() {
           api.get(`/api/review/pending/${studentId}`),
         ]);
 
-        // FCL history — derive from subject performance data
         const perf = perfRes.data?.subjects || [];
         setFclHistory(
           perf.map((s, i) => ({ name: s.subject_code || `S${i+1}`, fcl: s.fcl_level || 5 }))
         );
 
-        // Topic mastery grid
         const allTopics = perf.flatMap(s =>
           (s.topics || []).map(t => ({ topic: t.topic_id, mastery: t.mastery_prob || 0, subject: s.subject_code }))
         );
         setMastery(allTopics);
 
-        // Hint density per subject
         setHintDensity(
           perf.map(s => ({ name: s.subject_code || 'N/A', hints: s.total_hints || 0 }))
         );
 
-        // Spaced repetition items
         setReviewItems(reviewRes.data?.items || []);
       } catch (err) {
         console.error('Progress load failed:', err);
@@ -64,7 +68,17 @@ export default function ProgressTracker() {
       }
     }
     load();
-  }, [studentId]);
+  }, [studentId, isAuthenticated, navigate]);
+
+  if (!studentId) {
+    return (
+      <PageShell title="Progress Tracker">
+        <div className="card p-10 text-center text-muted">
+          Please log in again. <Link to="/auth">Go to login</Link>
+        </div>
+      </PageShell>
+    );
+  }
 
   if (loading) return (
     <PageShell title="Progress Tracker">

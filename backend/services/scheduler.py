@@ -3,7 +3,7 @@ from apscheduler.triggers.cron import CronTrigger
 from datetime import date, timedelta
 from db.database import SessionLocal
 from db.models import ReviewSchedule, TopicMastery, Student
-from services.style_service import run_detection_for_all_subjects   # <-- add this import
+from services.style_service import run_detection_for_all_subjects
 import logging
 
 logger = logging.getLogger(__name__)
@@ -33,15 +33,9 @@ def update_review_schedules():
     finally:
         db.close()
 
-# ── NEW: Adaptive style detection ─────────────────────────────────
 def detect_styles_for_all_students():
-    """
-    Run learning style detection for every student in the system.
-    This is called weekly to identify changes in learning patterns.
-    """
     db = SessionLocal()
     try:
-        # Get all students who are not teachers
         students = db.query(Student).filter(Student.is_teacher == False).all()
         results = []
         for student in students:
@@ -68,11 +62,9 @@ def schedule_mastered_topic(student_id, subject_id, topic_id, db):
 
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    # Existing review schedule job (daily at 2:00 AM)
     scheduler.add_job(update_review_schedules,
                        trigger=CronTrigger(hour=2, minute=0),
                        id='update_reviews', replace_existing=True)
-    # NEW: Weekly style detection job (Sundays at 3:00 AM)
     scheduler.add_job(detect_styles_for_all_students,
                        trigger=CronTrigger(day_of_week='sun', hour=3, minute=0),
                        id='detect_styles', replace_existing=True)

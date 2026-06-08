@@ -1,235 +1,269 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import Optional, List
-import base64
-from db.database import get_db
-from db.models import LibraryContent, LibrarySession, StudentSubject, Student, Subject, ConversationSession
-from auth import get_current_student
-from services.llm_service import generate_library_explanation
-from services.points_service import award_library_session_points
 from pydantic import BaseModel
+from typing import Optional, List
 from datetime import datetime
 
-router = APIRouter(prefix='/api/library', tags=['Library'])
+from db.database import get_db
+from db.models   import LibraryContent, LibrarySession, Student, Subject, StudentSubject
+from auth        import get_current_student
+from services.points_service import award_library_session_points
 
-# ── Schemas 
-class ContentUploadRequest(BaseModel):
-    title: str
-    description: Optional[str] = None
-    content_type: str   # pdf, text, video_link, image
-    content_data: str   # base64 for files, URL for links
-    subject_code: str
-    topic_tags: List[str] = []
-    grade_min: int = 1
-    grade_max: int = 19
+router = APIRouter()
 
-class ContentResponse(BaseModel):
-    id: int
-    title: str
-    description: Optional[str]
-    content_type: str
-    subject_id: int
-    subject_code: str
-    subject_name: str
-    topic_tags: List[str]
-    grade_min: int
-    grade_max: int
-    uploaded_at: datetime
 
-class StudySessionRequest(BaseModel):
-    content_id: int
-    student_id: int
-    initial_question: Optional[str] = None
+# ══════════════════════════════════════════════════════════════════
+#  SCHEMAS
+# ══════════════════════════════════════════════════════════════════
 
-# ── Teacher upload endpoint 
-@router.post('/upload', status_code=201)
-def upload_content(
-    req: ContentUploadRequest,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_student)
-):
-    if not current_user.is_teacher:
-        raise HTTPException(403, 'Only teachers can upload content.')
-    
-    subj = db.query(Subject).filter(Subject.code == req.subject_code).first()
+class LibraryUploadRequest(BaseModel):
+    title:        str
+    description:  Optional[str] = None
+    content_type: str            # text | link | image | pdf
+    file_data:    str
+    subject_id:   int
+    grade:        int = 1
+    topic_tags:   Optional[List[str]] = []
+
+class LibraryUpdateRequest(BaseModel):
+    title:        Optional[str]       = None
+    description:  Optional[str]       = None
+    content_type: Optional[str]       = None
+    file_data:    Optional[str]       = None
+    subject_id:   Optional[int]       = None
+    grade:        Optional[int]       = None
+    topic_tags:   Optional[List[str]] = None
+    is_published: Optional[bool]      = None
+
+class SessionEndRequest(BaseModel):
+    student_id:    int
+    content_id:    int
+    duration_minutes: int
+    ai_tutor_used: bool = False
+
+
+# ══════════════════════════════════════════════════════════════════
+#  TEACHER ENDPOINTS
+# ══════════════════════════════════════════════════════════════════
+
+@router.post('/upload')
+def upload_content(req: LibraryUploadRequest,
+                   db: Session = Depends(get_db),
+                   current_user = Depends(get_current_student)):
+    teacher_id = int(current_user.id) if hasattr(current_user,'id') else current_user
+
+    subj = db.query(Subject).filter(Subject.id == req.subject_id).first()
     if not subj:
-        raise HTTPException(404, f'Subject code {req.subject_code} not found.')
-    
-    content = LibraryContent(
-        teacher_id=current_user.id,
-        subject_id=subj.id,
-        title=req.title,
-        description=req.description,
-        content_type=req.content_type,
-        file_data=req.content_data,
-        topic_tags=req.topic_tags,
-        grade_min=req.grade_min,
-        grade_max=req.grade_max,
-        is_published=True
-    )
-    db.add(content)
-    db.commit()
-    db.refresh(content)
-    return {'message': 'Content uploaded successfully', 'content_id': content.id}
+        raise HTTPException(404, 'Subject not found')
 
-# ── Student library view (filtered) 
+    item = LibraryContent(
+        teacher_id   = teacher_id,
+        subject_id   = req.subject_id,
+        title        = req.title.strip(),
+        description  = req.description,
+        content_type = req.content_type,
+        file_data    = req.file_data,
+        grade        = req.grade,
+        is_published = True,
+    )
+    try:
+        item.topic_tags = req.topic_tags or []
+    except Exception:
+        pass
+
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return _format_item(item, subj)
+
+
+@router.get('/teacher/{teacher_id}')
+def get_teacher_content(teacher_id: int,
+                         db: Session = Depends(get_db),
+                         current_user = Depends(get_current_student)):
+    items = db.query(LibraryContent).filter(
+        LibraryContent.teacher_id == teacher_id
+    ).order_by(LibraryContent.uploaded_at.desc()).all()
+    return [_format_item(item, db.query(Subject).filter(Subject.id==item.subject_id).first()) for item in items]
+
+
+@router.patch('/{content_id}')
+def update_content(content_id: int, req: LibraryUpdateRequest,
+                   db: Session = Depends(get_db),
+                   current_user = Depends(get_current_student)):
+    item = db.query(LibraryContent).filter(LibraryContent.id == content_id).first()
+    if not item:
+        raise HTTPException(404, 'Content not found')
+
+    if req.title        is not None: item.title        = req.title.strip()
+    if req.description  is not None: item.description  = req.description
+    if req.content_type is not None: item.content_type = req.content_type
+    if req.file_data    is not None: item.file_data    = req.file_data
+    if req.subject_id   is not None: item.subject_id   = req.subject_id
+    if req.grade        is not None: item.grade        = req.grade
+    if req.is_published is not None: item.is_published = req.is_published
+    if req.topic_tags   is not None:
+        try: item.topic_tags = req.topic_tags
+        except Exception: pass
+
+    db.commit()
+    db.refresh(item)
+    subj = db.query(Subject).filter(Subject.id == item.subject_id).first()
+    return _format_item(item, subj)
+
+
+@router.delete('/{content_id}')
+def delete_content(content_id: int,
+                   db: Session = Depends(get_db),
+                   current_user = Depends(get_current_student)):
+    item = db.query(LibraryContent).filter(LibraryContent.id == content_id).first()
+    if not item:
+        raise HTTPException(404, 'Content not found')
+    db.delete(item)
+    db.commit()
+    return {'status': 'deleted'}
+
+
+# ══════════════════════════════════════════════════════════════════
+#  STUDENT ENDPOINTS
+# ══════════════════════════════════════════════════════════════════
+
 @router.get('/student/{student_id}')
-def get_student_library(
-    student_id: int,
-    subject_code: Optional[str] = None,
-    topic: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_student)
-):
-    # Get student's enrolled subjects
-    enrollments = db.query(StudentSubject).filter(StudentSubject.student_id == student_id).all()
+def get_student_library(student_id: int,
+                         db: Session = Depends(get_db),
+                         current_user = Depends(get_current_student)):
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(404, 'Student not found')
+
+    grade = student.grade or 1
+    enrollments = db.query(StudentSubject).filter(
+        StudentSubject.student_id == student_id
+    ).all()
     subject_ids = [e.subject_id for e in enrollments]
+
     if not subject_ids:
         return []
-    
-    student = db.query(Student).filter(Student.id == student_id).first()
-    grade = student.grade if student else 1
-    
-    query = db.query(LibraryContent).filter(
+
+    items = db.query(LibraryContent).filter(
+        LibraryContent.is_published == True,
         LibraryContent.subject_id.in_(subject_ids),
-        LibraryContent.grade_min <= grade,
-        LibraryContent.grade_max >= grade,
-        LibraryContent.is_published == True
-    )
-    if subject_code:
-        subj = db.query(Subject).filter(Subject.code == subject_code).first()
-        if subj:
-            query = query.filter(LibraryContent.subject_id == subj.id)
-    if topic:
-        query = query.filter(LibraryContent.topic_tags.contains([topic]))
-    
-    items = query.order_by(LibraryContent.uploaded_at.desc()).all()
-    
-    result = []
+        LibraryContent.grade == grade
+    ).order_by(LibraryContent.uploaded_at.desc()).all()
+
+    grouped = {}
     for item in items:
         subj = db.query(Subject).filter(Subject.id == item.subject_id).first()
-        result.append({
-            'id': item.id,
-            'title': item.title,
-            'description': item.description,
-            'content_type': item.content_type,
-            'subject_id': item.subject_id,
-            'subject_code': subj.code if subj else None,
-            'subject_name': subj.name if subj else None,
-            'topic_tags': item.topic_tags,
-            'grade_min': item.grade_min,
-            'grade_max': item.grade_max,
-            'uploaded_at': item.uploaded_at.isoformat(),
-            'file_data': item.file_data[:200] if item.file_data else None  # preview
-        })
-    return result
+        subj_name = subj.name if subj else 'Unknown'
+        subj_code = subj.code if subj else '—'
+        if item.subject_id not in grouped:
+            grouped[item.subject_id] = {
+                'subject_id':   item.subject_id,
+                'subject_name': subj_name,
+                'subject_code': subj_code,
+                'items':        [],
+            }
+        grouped[item.subject_id]['items'].append(_format_item(item, subj))
+    return list(grouped.values())
 
-# ── Single content item with full data 
+
+@router.get('/subject/{subject_id}/student/{student_id}')
+def get_subject_content(subject_id: int, student_id: int,
+                         db: Session = Depends(get_db),
+                         current_user = Depends(get_current_student)):
+    student = db.query(Student).filter(Student.id == student_id).first()
+    grade = student.grade if student else 1
+
+    items = db.query(LibraryContent).filter(
+        LibraryContent.subject_id   == subject_id,
+        LibraryContent.is_published == True,
+        LibraryContent.grade        == grade
+    ).order_by(LibraryContent.uploaded_at.desc()).all()
+
+    subj = db.query(Subject).filter(Subject.id == subject_id).first()
+    return [_format_item(item, subj) for item in items]
+
+
 @router.get('/content/{content_id}')
-def get_content(content_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_student)):
+def get_content_detail(content_id: int,
+                        db: Session = Depends(get_db),
+                        current_user = Depends(get_current_student)):
     item = db.query(LibraryContent).filter(LibraryContent.id == content_id).first()
     if not item:
         raise HTTPException(404, 'Content not found')
     subj = db.query(Subject).filter(Subject.id == item.subject_id).first()
-    return {
-        'id': item.id,
-        'title': item.title,
-        'description': item.description,
-        'content_type': item.content_type,
-        'file_data': item.file_data,
-        'subject_id': item.subject_id,
-        'subject_code': subj.code if subj else None,
-        'subject_name': subj.name if subj else None,
-        'topic_tags': item.topic_tags,
-        'grade_min': item.grade_min,
-        'grade_max': item.grade_max,
-    }
+    return _format_item(item, subj)
 
-# ── Study with AI Tutor 
-@router.post('/study')
-def study_with_ai(
-    req: StudySessionRequest,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_student)
-):
-    # Get content
+
+# ══════════════════════════════════════════════════════════════════
+#  STUDY SESSIONS (unchanged)
+# ══════════════════════════════════════════════════════════════════
+
+@router.post('/session/start')
+def start_session(student_id: int, content_id: int,
+                   db: Session = Depends(get_db),
+                   current_user = Depends(get_current_student)):
+    session = LibrarySession(
+        student_id = student_id,
+        content_id = content_id,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return {'session_id': session.id, 'started_at': session.started_at}
+
+
+@router.post('/session/end')
+def end_session(req: SessionEndRequest,
+                db: Session = Depends(get_db),
+                current_user = Depends(get_current_student)):
     content = db.query(LibraryContent).filter(LibraryContent.id == req.content_id).first()
     if not content:
         raise HTTPException(404, 'Content not found')
-    
-    # Get student's FCL for this subject
-    from services.points_service import get_current_subject_fcl
-    fcl_level = get_current_subject_fcl(req.student_id, content.subject_id, db)
-    if not fcl_level:
-        fcl_level = 6  # default
-    
-    # Get student's learning style for this subject
-    from services.style_service import get_subject_style
-    learning_style = get_subject_style(req.student_id, content.subject_id, db)
-    
-    # Create conversation session
-    chat_session = ConversationSession(
-        student_id=req.student_id,
-        subject_id=content.subject_id,
-        started_at=datetime.utcnow()
+
+    session = db.query(LibrarySession).filter(
+        LibrarySession.student_id == req.student_id,
+        LibrarySession.content_id == req.content_id,
+        LibrarySession.ended_at   == None,
+    ).order_by(LibrarySession.started_at.desc()).first()
+
+    if session:
+        session.ended_at      = datetime.utcnow()
+        session.ai_tutor_used = req.ai_tutor_used
+        db.commit()
+
+    result = award_library_session_points(
+        student_id    = req.student_id,
+        subject_id    = content.subject_id,
+        content_id    = req.content_id,
+        duration_minutes = req.duration_minutes,
+        db            = db,
     )
-    db.add(chat_session)
-    db.flush()
-    
-    # Generate initial AI response using library explanation
-    initial_question = req.initial_question or f"Please help me understand this document: {content.title}"
-    
-    response = generate_library_explanation(
-        content_text=content.file_data or '',
-        student_question=initial_question,
-        topic=content.topic_tags[0] if content.topic_tags else 'general',
-        fcl_level=fcl_level,
-        learning_style=learning_style,
-        session_id=chat_session.id,
-        student_id=req.student_id,
-        db=db
-    )
-    
-    # Record library session start
-    lib_session = LibrarySession(
-        student_id=req.student_id,
-        content_id=req.content_id,
-        started_at=datetime.utcnow(),
-        ai_tutor_used=True
-    )
-    db.add(lib_session)
-    db.commit()
-    
     return {
-        'session_id': chat_session.id,
-        'response': response['response'],
-        'content_title': content.title,
-        'fcl_level': fcl_level,
-        'learning_style': learning_style
+        'session_ended':  True,
+        'duration':       req.duration_minutes,
+        'points_earned':  result.get('points_earned', 0),
+        'fcl_changed':    result.get('fcl_changed', False),
     }
 
-# ── End library session (award points) 
-@router.post('/end-session/{session_id}')
-def end_library_session(
-    session_id: int,
-    duration_minutes: int,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_student)
-):
-    lib_session = db.query(LibrarySession).filter(LibrarySession.id == session_id).first()
-    if not lib_session:
-        raise HTTPException(404, 'Session not found')
-    lib_session.ended_at = datetime.utcnow()
-    db.commit()
-    
-    # Award points if duration >= 10 minutes
-    if duration_minutes >= 10:
-        points_result = award_library_session_points(
-            student_id=lib_session.student_id,
-            subject_id=db.query(LibraryContent).filter(LibraryContent.id == lib_session.content_id).first().subject_id,
-            content_id=lib_session.content_id,
-            duration_minutes=duration_minutes,
-            db=db
-        )
-        return {'points_earned': points_result.get('points_earned', 0)}
-    return {'points_earned': 0}
+
+# ══════════════════════════════════════════════════════════════════
+#  HELPER
+# ══════════════════════════════════════════════════════════════════
+
+def _format_item(item: LibraryContent, subj) -> dict:
+    return {
+        'id':           item.id,
+        'teacher_id':   item.teacher_id,
+        'subject_id':   item.subject_id,
+        'subject_name': subj.name if subj else '—',
+        'subject_code': subj.code if subj else '—',
+        'title':        item.title,
+        'description':  item.description,
+        'content_type': item.content_type,
+        'file_data':    item.file_data,
+        'grade':        item.grade,
+        'topic_tags':   getattr(item, 'topic_tags', []) or [],
+        'is_published': item.is_published,
+        'uploaded_at':  item.uploaded_at.isoformat() if item.uploaded_at else None,
+    }

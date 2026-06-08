@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import ReactMarkdown from 'react-markdown';
 import PageShell from '../components/PageShell';
 import api from '../services/api';
@@ -24,30 +25,41 @@ const SUBJECT_TOPICS = {
 
 function gradeToFCL(g){if(!g||g<=0)return 5;if(g<=4)return 2;if(g<=7)return 4;if(g<=9)return 6;if(g<=12)return 8;if(g<=15)return 9;if(g<=17)return 11;return 13;}
 
-/*  Points Progress Bar  */
+// Helper to get numeric ID from user context
+function getStudentId(user) {
+  return user?.id || localStorage.getItem('sa_studentId');
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Subcomponents (PointsBar, ProgressBar, TutorPanel, ResumeModal, ResultsScreen)
+// ─────────────────────────────────────────────────────────────────
+
 function PointsBar({ current, needed, fcl, pointsJustEarned }) {
-  const pct = needed > 0 ? Math.min(100, Math.round((current / needed) * 100)) : 100;
+  // current = total points accumulated for this topic
+  const LEVEL_SIZE = 1000;
+  const pointsWithinLevel = current % LEVEL_SIZE;
+  const remainingToNext = LEVEL_SIZE - pointsWithinLevel;
+  const pct = Math.min(100, Math.max(0, Math.round((pointsWithinLevel / LEVEL_SIZE) * 100)));
+
   return (
     <div className='card p-4 mb-4'>
       <div className='flex items-center justify-between mb-2'>
         <div className='flex items-center gap-2'>
-          <span className='text-muted text-xs'>FCL {fcl} Progress</span>
+          <span className='text-muted text-xs'>Topic FCL {fcl} Progress</span>
           {pointsJustEarned > 0 && (
             <span className='text-green-400 text-xs font-bold animate-pulse'>+{pointsJustEarned} pts</span>
           )}
         </div>
-        <span className='text-muted text-xs stat-number'>{current} / {needed} pts</span>
+        <span className='text-muted text-xs stat-number'>{pointsWithinLevel} / {LEVEL_SIZE} pts within level</span>
       </div>
       <div className='w-full bg-border rounded-full h-2.5'>
-        <div className='h-2.5 rounded-full bg-teal transition-all duration-700'
-          style={{ width:`${pct}%` }} />
+        <div className='h-2.5 rounded-full bg-teal transition-all duration-700' style={{ width: `${pct}%` }} />
       </div>
-      <p className='text-muted text-xs mt-1'>{needed - current} points to FCL {fcl + 1}</p>
+      <p className='text-muted text-xs mt-1'>{remainingToNext} points to FCL {fcl + 1}</p>
+      <p className='text-muted text-xs mt-0.5'>Total points earned: {current}</p>
     </div>
   );
 }
-
-/*  Progress Bar  */
 function ProgressBar({ current, total }) {
   const pct = total > 0 ? Math.round((current / total) * 100) : 0;
   return (
@@ -63,7 +75,6 @@ function ProgressBar({ current, total }) {
   );
 }
 
-/*  Mini Tutor Panel  */
 function TutorPanel({ isOpen, onClose, question, topicId, fcl, sid, subjectId }) {
   const [sessionId,   setSessionId]   = useState(null);
   const [messages,    setMessages]    = useState([]);
@@ -72,14 +83,14 @@ function TutorPanel({ isOpen, onClose, question, topicId, fcl, sid, subjectId })
   const [initialized, setInitialized] = useState(false);
   const bottomRef = useRef(null);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [messages]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:'smooth' }); }, [messages]);
 
   useEffect(() => {
     if (!isOpen || initialized || !question) return;
     setInitialized(true);
     (async () => {
       try {
-        const { data } = await api.post('/api/chat/new-session', { student_id:parseInt(sid), subject_id:subjectId });
+        const { data } = await api.post('/api/chat/new-session', { student_id: parseInt(sid), subject_id:subjectId });
         const newSid = data.session_id;
         setSessionId(newSid);
         const autoMsg = `I need help with this question:\n\n"${question.question_text}"\n\nOptions:\n${question.options.map((o,i)=>`${String.fromCharCode(65+i)}. ${o}`).join('\n')}\n\nGive me a hint without revealing the answer.`;
@@ -138,7 +149,6 @@ function TutorPanel({ isOpen, onClose, question, topicId, fcl, sid, subjectId })
   );
 }
 
-/*  Resume Modal  */
 function ResumeModal({ saved, onResume, onNew }) {
   const ago = saved?.startedAt ? Math.round((Date.now()-saved.startedAt)/60000) : 0;
   return (
@@ -166,7 +176,6 @@ function ResumeModal({ saved, onResume, onNew }) {
   );
 }
 
-/*  Results Screen  */
 function ResultsScreen({ stats, topicId, subjectName, sid, onRetry, onDashboard, onChat }) {
   const accuracy = QUIZ_LENGTH > 0 ? Math.round((stats.correct/QUIZ_LENGTH)*100) : 0;
   const g = accuracy>=90?{label:'Excellent!',colour:'text-green-400',icon:'🏆'}:accuracy>=70?{label:'Good work!',colour:'text-teal',icon:'✅'}:accuracy>=50?{label:'Keep going!',colour:'text-amber-400',icon:'📈'}:{label:'Needs practice',colour:'text-red-400',icon:'📚'};
@@ -219,12 +228,15 @@ function ResultsScreen({ stats, topicId, subjectName, sid, onRetry, onDashboard,
   );
 }
 
-/*   MAIN QUIZ PAGE */
-
+// ─────────────────────────────────────────────────────────────────
+// MAIN QUIZ PAGE – with FCL points bar fix (never decreases)
+// ─────────────────────────────────────────────────────────────────
 export default function QuizPage() {
+  const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const sid      = window.__studentId;
-
+  
+  const sid = getStudentId(user);
+  
   const [enrolled,    setEnrolled]    = useState([]);
   const [subjectCode, setSubjectCode] = useState('MATH');
   const [subjectId,   setSubjectId]   = useState(null);
@@ -232,8 +244,6 @@ export default function QuizPage() {
   const [topicId,     setTopicId]     = useState('mathematics_algebra');
   const [fcl,         setFcl]         = useState(5);
   const [grade,       setGrade]       = useState(null);
-
-  // Add learning style state
   const [learningStyle, setLearningStyle] = useState('reading');
 
   const [question,    setQuestion]    = useState(null);
@@ -252,11 +262,10 @@ export default function QuizPage() {
   const [showTutor,   setShowTutor]   = useState(false);
   const [tutorConsultedThisQ, setTutorConsultedThisQ] = useState(false);
 
-  // Points state
   const [pointsJustEarned,   setPointsJustEarned]   = useState(0);
-  const [currentPoints,      setCurrentPoints]       = useState(0);
-  const [pointsToNextFcl,    setPointsToNextFcl]     = useState(100);
-  const [subjectFclDisplay,  setSubjectFclDisplay]   = useState(fcl);
+  const [totalPoints,        setTotalPoints]        = useState(0);
+  const [pointsNeeded,       setPointsNeeded]       = useState(1000);
+  const [subjectFclDisplay,  setSubjectFclDisplay]  = useState(fcl);
 
   const [savedQuiz,       setSavedQuiz]       = useState(null);
   const [showResumeModal, setShowResumeModal] = useState(false);
@@ -267,7 +276,6 @@ export default function QuizPage() {
     totalPointsEarned:0,bonusEarned:0,pointsEarned:0,
   });
 
-  // Refs for cleanup
   const quizDoneRef    = useRef(false);
   const questionNumRef = useRef(0);
   const statsRef       = useRef(stats);
@@ -289,11 +297,12 @@ export default function QuizPage() {
   // Save incomplete quiz on unmount
   useEffect(() => {
     return () => {
-      if (!quizDoneRef.current && questionNumRef.current > 0) {
+      if (!quizDoneRef.current && questionNumRef.current > 0 && sid) {
         localStorage.setItem(`quiz_incomplete_${sid}`, JSON.stringify({
           topicId:topicIdRef.current, subjectCode:subjectCodeRef.current,
           subjectName:subjectNameRef.current, fcl:fclRef.current,
           questionNum:questionNumRef.current, stats:statsRef.current, startedAt:Date.now(),
+          totalPoints: totalPoints, pointsNeeded: pointsNeeded
         }));
         const countKey=`quiz_abandon_${sid}`;
         const count=parseInt(localStorage.getItem(countKey)||'0')+1;
@@ -301,14 +310,15 @@ export default function QuizPage() {
         if(count>=3){
           api.post('/api/quiz/abandoned',{student_id:parseInt(sid),topic_id:topicIdRef.current,abandon_count:count}).catch(()=>{});
         }
-      } else if (quizDoneRef.current) {
+      } else if (quizDoneRef.current && sid) {
         localStorage.removeItem(`quiz_incomplete_${sid}`);
         localStorage.removeItem(`quiz_abandon_${sid}`);
       }
     };
-  }, []); 
+  }, [sid, totalPoints, pointsNeeded]);
 
   const saveToHistory = useCallback((finalStats) => {
+    if (!sid) return;
     try {
       const key=`quiz_history_${sid}`;
       const existing=JSON.parse(localStorage.getItem(key)||'[]');
@@ -317,17 +327,21 @@ export default function QuizPage() {
     } catch{}
   },[sid]);
 
-  // Load enrolled subjects + grade + learning style
   useEffect(() => {
+    if (!sid) {
+      navigate('/auth', { replace: true });
+      return;
+    }
     Promise.all([
       api.get(`/api/subjects/enrolled/${sid}`),
       api.get(`/api/students/${sid}/profile`),
     ]).then(([enrollRes,profRes]) => {
       const enrollments=enrollRes.data||[];
-      const studentGrade=profRes.data?.grade||null;
-      const style = profRes.data?.preferred_learning_style || 'reading';  // get learning style
-      setGrade(studentGrade); setEnrolled(enrollments);
-      setLearningStyle(style);
+      const profile=profRes.data||{};
+      const studentGrade=profile.grade||null;
+      setGrade(studentGrade);
+      setEnrolled(enrollments);
+      if(profile.preferred_learning_style) setLearningStyle(profile.preferred_learning_style);
       if (enrollments.length>0) {
         const first=enrollments[0];
         const avgFcl=enrollments.filter(e=>e.fcl_level).reduce((s,e,_,a)=>s+e.fcl_level/a.length,0);
@@ -347,15 +361,19 @@ export default function QuizPage() {
       setReady(true);
       try {
         const saved=JSON.parse(localStorage.getItem(`quiz_incomplete_${sid}`)||'null');
-        if(saved&&Date.now()-saved.startedAt<24*60*60*1000){setSavedQuiz(saved);setShowResumeModal(true);}
+        if(saved&&Date.now()-saved.startedAt<24*60*60*1000){
+          setSavedQuiz(saved);
+          setShowResumeModal(true);
+          if(saved.totalPoints) setTotalPoints(saved.totalPoints);
+          if(saved.pointsNeeded) setPointsNeeded(saved.pointsNeeded);
+        }
         else if(saved){localStorage.removeItem(`quiz_incomplete_${sid}`);}
       } catch{}
-    }).catch(()=>{
-      const urlTopic=new URLSearchParams(window.location.search).get('topic')||'mathematics_algebra';
-      const code=Object.entries(SUBJECT_MAP).find(([,t])=>t.includes(urlTopic))?.[0]||'MATH';
-      setTopicId(urlTopic);setSubjectCode(code);setSubjectName(SUBJECT_NAMES[code]||'Mathematics');setReady(true);
+    }).catch((err) => {
+      console.error('Failed to load quiz data:', err);
+      setReady(true);
     });
-  },[sid]);
+  },[sid, navigate]);
 
   function handleSubjectChange(code) {
     const enrollment=enrolled.find(x=>x.subject_code===code);
@@ -377,37 +395,37 @@ export default function QuizPage() {
     setHintLevel(0);setHintText('');setHintError('');setQuestionNum(0);
     setQuizDone(false);setShowTutor(false);setTutorConsultedThisQ(false);
     setPointsJustEarned(0);
+    setTotalPoints(0);
+    setPointsNeeded(1000);
     setStats({correct:0,wrong:0,hints:0,streak:0,bestStreak:0,fclChanged:false,newFcl:null,tutorConsultations:0,totalPointsEarned:0,bonusEarned:0,pointsEarned:0});
   }
 
-  //fetchQuestion now includes learning_style
   const fetchQuestion = useCallback(async (topic, fclLevel) => {
+    if (!sid) return;
     setLoading(true); setSelected(null); setFeedback(null); setSubmitError('');
     setHintLevel(0); setHintText(''); setHintError('');
     setShowTutor(false); setTutorConsultedThisQ(false); setPointsJustEarned(0);
     try {
-const { data } = await api.post('/api/quiz/generate-question',{
+      const { data } = await api.post('/api/quiz/generate-question',{
         student_id: parseInt(sid),
         topic,
         fcl_level: fclLevel,
-        learning_style: learningStyle,   
+        learning_style: learningStyle
       });
-      if (!data || !data.question_text) {
-        console.error('Question fetch failed: empty response from server');
-        return;
-      }
       setQuestion(data);
       if(data.fcl_used){setFcl(data.fcl_used);setSubjectFclDisplay(data.fcl_used);}
+      // Do NOT update totalPoints here – keep existing total
+      if(data.points_to_next_fcl !== undefined) setPointsNeeded(data.points_to_next_fcl);
     } catch(err){console.error('Question fetch failed:',err);}
     finally{setLoading(false);}
-  },[sid, learningStyle]); 
+  },[sid, learningStyle]);
 
-  useEffect(()=>{if(ready&&topicId)fetchQuestion(topicId,fcl);},[ready]);
+  useEffect(()=>{if(ready && sid && topicId)fetchQuestion(topicId,fcl);},[ready, sid, topicId, fcl, fetchQuestion]);
 
   const prevTopicRef=useRef('');
   useEffect(()=>{
-    if(ready&&topicId&&topicId!==prevTopicRef.current){prevTopicRef.current=topicId;fetchQuestion(topicId,fcl);}
-  },[topicId,ready]);
+    if(ready && sid && topicId && topicId!==prevTopicRef.current){prevTopicRef.current=topicId;fetchQuestion(topicId,fcl);}
+  },[topicId, ready, sid, fcl, fetchQuestion]);
 
   const submitAnswer = async (option) => {
     if(feedback||submitting)return;
@@ -426,11 +444,15 @@ const { data } = await api.post('/api/quiz/generate-question',{
         tutor_consulted:tutorConsultedThisQ,
       });
       setFeedback(data);
-      const pts=data.points_earned||0;
+      const pts = data.points_earned || 0;
       setPointsJustEarned(pts);
-      setCurrentPoints(data.current_points||0);
-      setPointsToNextFcl(data.points_to_next_fcl||100);
+      
+      // ✅ Use the exact total_points from backend (already includes new points)
+      if (data.total_points !== undefined) setTotalPoints(data.total_points);
+      
+      if(data.points_to_next_fcl !== undefined) setPointsNeeded(data.points_to_next_fcl);
       if(data.subject_fcl){setSubjectFclDisplay(data.subject_fcl);}
+      
       setStats(prev=>{
         const newStreak=data.is_correct?prev.streak+1:0;
         return{...prev,
@@ -455,11 +477,11 @@ const { data } = await api.post('/api/quiz/generate-question',{
   const handleNext = async () => {
     const next=questionNum+1;
     if(next>=QUIZ_LENGTH){
-      // Call quiz complete for bonus points
       try {
         const res=await api.post('/api/quiz/complete',{student_id:parseInt(sid),topic_id:topicId,correct_count:stats.correct,total_count:QUIZ_LENGTH});
         if(res.data.bonus_awarded>0){
           setStats(prev=>({...prev,bonusEarned:res.data.bonus_awarded,totalPointsEarned:prev.totalPointsEarned+res.data.bonus_awarded,fclChanged:res.data.fcl_changed||prev.fclChanged,newFcl:res.data.new_fcl||prev.newFcl}));
+          setTotalPoints(prev => prev + (res.data.bonus_awarded || 0));
         }
       } catch{}
       saveToHistory(stats);
@@ -495,8 +517,18 @@ const { data } = await api.post('/api/quiz/generate-question',{
   const hintStyle={1:'bg-amber-500/10 border border-amber-500/30 text-amber-300',2:'bg-orange-500/10 border border-orange-500/30 text-orange-300',3:'bg-red-500/10 border border-red-500/30 text-red-300'}[hintLevel]||'';
   const currentTopics=SUBJECT_TOPICS[subjectCode]?.topics||[];
 
-  const headerActions=(
+  const styleInfo = {
+    visual:      { icon:'👁️', label:'Visual',         class:'bg-blue-400/20 text-blue-400' },
+    auditory:    { icon:'🎧', label:'Auditory',        class:'bg-purple-400/20 text-purple-400' },
+    reading:     { icon:'📖', label:'Reading/Writing', class:'bg-green-400/20 text-green-400' },
+    kinesthetic: { icon:'🧪', label:'Kinesthetic',     class:'bg-amber-400/20 text-amber-400' },
+  }[learningStyle] || { icon:'📚', label:'Reading', class:'bg-gray-400/20 text-gray-400' };
+
+  const headerActions = (
     <div className='flex items-center gap-3'>
+      <div className={`px-2.5 py-1 rounded-full text-xs font-medium ${styleInfo.class}`}>
+        {styleInfo.icon} {styleInfo.label}
+      </div>
       <select value={subjectCode} onChange={e=>handleSubjectChange(e.target.value)} className='bg-input border border-border rounded-lg px-3 py-1.5 text-primary text-sm focus:border-teal/60 focus:outline-none'>
         {enrolled.length>0?enrolled.map(e=><option key={e.subject_code} value={e.subject_code}>{e.subject_name}</option>):Object.entries(SUBJECT_TOPICS).map(([code,s])=><option key={code} value={code}>{s.name}</option>)}
       </select>
@@ -513,6 +545,8 @@ const { data } = await api.post('/api/quiz/generate-question',{
         setSubjectCode(savedQuiz.subjectCode);setSubjectName(savedQuiz.subjectName);
         setTopicId(savedQuiz.topicId);setFcl(savedQuiz.fcl);
         setQuestionNum(savedQuiz.questionNum);setStats(savedQuiz.stats);
+        if(savedQuiz.totalPoints) setTotalPoints(savedQuiz.totalPoints);
+        if(savedQuiz.pointsNeeded) setPointsNeeded(savedQuiz.pointsNeeded);
         setShowResumeModal(false);localStorage.removeItem(`quiz_incomplete_${sid}`);
         fetchQuestion(savedQuiz.topicId,savedQuiz.fcl);
       }} onNew={()=>{setShowResumeModal(false);localStorage.removeItem(`quiz_incomplete_${sid}`);setSavedQuiz(null);}}/>
@@ -529,31 +563,31 @@ const { data } = await api.post('/api/quiz/generate-question',{
     <PageShell title='Quiz' subtitle={subjectName} actions={headerActions}>
       <TutorPanel isOpen={showTutor} onClose={()=>setShowTutor(false)} question={question} topicId={topicId} fcl={fcl} sid={sid} subjectId={subjectId}/>
       <ProgressBar current={questionNum} total={QUIZ_LENGTH}/>
-      <PointsBar current={currentPoints} needed={pointsToNextFcl} fcl={subjectFclDisplay} pointsJustEarned={pointsJustEarned}/>
-
-      {/* Stats strip */}
+      <PointsBar current={totalPoints} needed={pointsNeeded} fcl={subjectFclDisplay} pointsJustEarned={pointsJustEarned}/>
       <div className='card p-4 mb-6 flex flex-wrap gap-6 items-center'>
         {[['Correct',stats.correct,'text-teal'],['Wrong',stats.wrong,'text-red-400'],['Hints',stats.hints,'text-amber-400'],['Streak',stats.streak,'text-green-400'],['Tutor',stats.tutorConsultations,'text-purple-400']].map(([l,v,c])=>(
           <div key={l} className='flex flex-col'><span className={`stat-number text-2xl font-bold ${c}`}>{v}</span><span className='text-xs text-muted uppercase tracking-wide'>{l}</span></div>
         ))}
         <div className='ml-auto text-sm text-muted'>Topic: <span className='text-primary font-medium'>{topicId.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</span></div>
       </div>
-
-      {/* Question */}
       {loading?(
         <div className='card p-10 text-center text-muted animate-pulse'>Generating question…</div>
       ):question?(
         <div className='card-hover p-6 mb-4'>
           <p className='text-primary text-lg font-medium mb-6 leading-relaxed'>{question.question_text}</p>
           {question.image_url && (
-  <div className="mb-4">
-    <img 
-      src={question.image_url} 
-      alt="Question illustration" 
-      className="rounded-lg max-w-full border border-teal/30 mx-auto"
-    />
-  </div>
-)}
+            <div className='my-4 flex justify-center'>
+              <img src={question.image_url} alt="Question visual" className='max-w-full rounded-lg shadow-md max-h-64 object-contain' />
+            </div>
+          )}
+          {question.youtube_url && (
+            <div className='my-4 flex justify-center'>
+              <a href={question.youtube_url} target="_blank" rel="noopener noreferrer" 
+                 className='inline-flex items-center gap-2 text-teal-400 underline hover:text-teal-300'>
+                📺 Watch a video explanation on YouTube
+              </a>
+            </div>
+          )}
           <div className='grid grid-cols-1 gap-3'>
             {question.options.map((opt,i)=>{
               const isSelected=selected===opt;
@@ -569,8 +603,6 @@ const { data } = await api.post('/api/quiz/generate-question',{
       ):(
         <div className='card p-10 text-center text-muted'>No question loaded.</div>
       )}
-
-      {/* Hints */}
       {question&&!feedback&&(
         <div className='mb-4'>
           {hintText&&<div className={`rounded-lg p-4 mb-3 text-sm ${hintStyle}`}><span className='font-semibold mr-2'>Hint {hintLevel} of 3:</span>{hintText}</div>}
@@ -579,10 +611,7 @@ const { data } = await api.post('/api/quiz/generate-question',{
           :(<p className='text-muted text-xs'>No more hints available.</p>)}
         </div>
       )}
-
       {submitError&&<div className='rounded-lg px-4 py-2.5 mb-3 bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs'>{submitError}</div>}
-
-      {/* Feedback */}
       {feedback&&(
         <div className={`rounded-lg p-5 mb-6 ${feedback.is_correct?'border-l-4 border-green-500 bg-green-500/5':'border-l-4 border-red-500 bg-red-500/5'}`}>
           <p className={`font-semibold mb-1 ${feedback.is_correct?'text-green-400':'text-red-400'}`}>{feedback.is_correct?'✓ Correct!':'✗ Incorrect'}</p>
@@ -593,7 +622,6 @@ const { data } = await api.post('/api/quiz/generate-question',{
           <p className='text-xs text-muted mt-3 pt-3 border-t border-border/50'>Question {questionNum+1} of {QUIZ_LENGTH} — {QUIZ_LENGTH-questionNum-1>0?`${QUIZ_LENGTH-questionNum-1} remaining`:'Last question!'}</p>
         </div>
       )}
-
       <div className='flex gap-3 flex-wrap'>
         {feedback&&<button className='btn-primary' onClick={handleNext}>{questionNum+1>=QUIZ_LENGTH?'See Results 🏆':'Next Question →'}</button>}
         <button className={`btn-ghost text-sm flex items-center gap-2 ${showTutor?'border-teal/40 text-teal':''}`} onClick={openTutor}>
@@ -604,4 +632,3 @@ const { data } = await api.post('/api/quiz/generate-question',{
     </PageShell>
   );
 }
-

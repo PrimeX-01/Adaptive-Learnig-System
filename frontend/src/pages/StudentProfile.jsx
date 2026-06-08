@@ -1,484 +1,304 @@
-import { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 import PageShell from '../components/PageShell';
 import api from '../services/api';
 
-/* ─── VARK learning styles ───────────────────────────────────────── */
-const LEARNING_STYLES = [
-  { value:'visual',      label:'Visual',           icon:'👁️', desc:'Charts, diagrams, images and colour-coded notes' },
-  { value:'auditory',    label:'Auditory',          icon:'🎧', desc:'Explanations, discussions and verbal repetition' },
-  { value:'reading',     label:'Reading / Writing', icon:'📖', desc:'Text-based content, lists and written notes' },
-  { value:'kinesthetic', label:'Kinesthetic',       icon:'🧪', desc:'Practice questions, examples and hands-on exercises' },
+const VARK_QUESTIONS = [
+  { q:'When learning something new, you prefer to:', options:[{label:'Watch a video or look at diagrams',style:'visual'},{label:'Listen to someone explain it',style:'auditory'},{label:'Read through notes or a textbook',style:'reading'},{label:'Try it yourself hands-on',style:'kinesthetic'}] },
+  { q:'When you need directions to a new place, you prefer:', options:[{label:'A map or visual guide',style:'visual'},{label:'Someone to tell you verbally',style:'auditory'},{label:'Written step-by-step instructions',style:'reading'},{label:'Just start walking and figure it out',style:'kinesthetic'}] },
+  { q:'When you remember something, you usually remember it by:', options:[{label:'A picture or image in your mind',style:'visual'},{label:'Hearing it said out loud',style:'auditory'},{label:'Reading it again',style:'reading'},{label:'Doing or experiencing it',style:'kinesthetic'}] },
+  { q:'When studying for a test, you find it most helpful to:', options:[{label:'Draw diagrams and colour-code notes',style:'visual'},{label:'Read notes aloud or record yourself',style:'auditory'},{label:'Re-read and rewrite your notes',style:'reading'},{label:'Practice with exercises and examples',style:'kinesthetic'}] },
+  { q:'You understand a concept best when:', options:[{label:'You can see it shown visually',style:'visual'},{label:'It is explained in conversation',style:'auditory'},{label:'You read a detailed explanation',style:'reading'},{label:'You can apply it to a real situation',style:'kinesthetic'}] },
 ];
 
-/* ─── Grade groups (same as Register.jsx) ────────────────────────── */
-const GRADE_GROUPS = [
-  {
-    group: 'Primary School',
-    options: [1,2,3,4,5,6,7].map(n => ({ value: n, label: `Grade ${n}` })),
-  },
-  {
-    group: 'High School',
-    options: [8,9,10,11,12].map(n => ({ value: n, label: `Grade ${n}` })),
-  },
-  {
-    group: 'Tertiary — Undergraduate',
-    options: [1,2,3,4,5].map(n => ({ value: n + 12, label: `Level ${n}` })),
-  },
-  {
-    group: 'Tertiary — Postgraduate',
-    options: [
-      { value: 18, label: 'Masters' },
-      { value: 19, label: 'PhD'     },
-    ],
-  },
-];
-
-/* ─── Grade value → readable label ──────────────────────────────── */
-function gradeLabel(v) {
-  if (!v) return 'Not set';
-  if (v <= 7)  return `Primary School — Grade ${v}`;
-  if (v <= 12) return `High School — Grade ${v}`;
-  if (v <= 17) return `Undergraduate — Level ${v - 12}`;
-  if (v === 18) return 'Postgraduate — Masters';
-  if (v === 19) return 'Postgraduate — PhD';
-  return `Grade ${v}`;
-}
-
-/* ─── FCL level label ─────────────────────────────────────────────── */
-const FCL_LABEL = (n) => {
-  if (!n) return 'Not assessed yet';
-  if (n <= 4)  return `Level ${n} — Foundation`;
-  if (n <= 7)  return `Level ${n} — Developing`;
-  if (n <= 10) return `Level ${n} — Proficient`;
-  return `Level ${n} — Advanced`;
+const STYLE_INFO = {
+  visual:      { icon:'👁️', label:'Visual',         color:'text-blue-400',   badge:'bg-blue-400/20 text-blue-400',   desc:'You learn best through diagrams, charts and visual aids.' },
+  auditory:    { icon:'🎧', label:'Auditory',        color:'text-purple-400', badge:'bg-purple-400/20 text-purple-400',desc:'You learn best through listening and verbal explanations.' },
+  reading:     { icon:'📖', label:'Reading/Writing', color:'text-green-400',  badge:'bg-green-400/20 text-green-400', desc:'You learn best through written notes and text content.' },
+  kinesthetic: { icon:'🧪', label:'Kinesthetic',     color:'text-amber-400',  badge:'bg-amber-400/20 text-amber-400', desc:'You learn best through hands-on practice and examples.' },
 };
 
-/* ─── Section wrapper ────────────────────────────────────────────── */
-function Section({ title, children }) {
-  return (
-    <div className='card'>
-      <div className='px-6 py-4 border-b border-border'>
-        <h2 className='text-primary font-semibold text-sm'>{title}</h2>
-      </div>
-      <div className='px-6 py-5'>{children}</div>
-    </div>
-  );
-}
-
-/* ─── Input field ────────────────────────────────────────────────── */
-function Field({ label, type='text', value, onChange, placeholder, disabled, hint }) {
-  return (
-    <div>
-      <label className='block text-muted text-xs font-medium uppercase tracking-wide mb-1.5'>
-        {label}
-      </label>
-      <input
-        type={type} value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder} disabled={disabled}
-        className={`w-full bg-app border border-border rounded-lg px-4 py-2.5 text-primary text-sm
-          placeholder-muted/50 focus:outline-none focus:border-teal transition-colors
-          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-      />
-      {hint && <p className='text-muted text-xs mt-1'>{hint}</p>}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   STUDENT PROFILE PAGE
-═══════════════════════════════════════════════════════════════════ */
 export default function StudentProfile() {
-  const nav = useNavigate();
-  const sid = window.__studentId;
+  const nav      = useNavigate();
+  const location = useLocation();
+  const { user, isAuthenticated } = useAuth();
+  const fileRef  = useRef(null);
 
-  /* ── Remote data ─────────────────────────────────────────────────── */
-  const [profile,  setProfile]  = useState(null);
-  const [subPerf,  setSubPerf]  = useState(null);
-  const [loading,  setLoading]  = useState(true);
-  const [saving,   setSaving]   = useState(false);
-  const [saveMsg,  setSaveMsg]  = useState(null);
+  // ✅ Use authenticated user ID, fallback to localStorage
+  const sid = user?.id || localStorage.getItem('sa_studentId');
 
-  /* ── Editable fields ─────────────────────────────────────────────── */
-  const [fullName,      setFullName]      = useState('');
-  const [username,      setUsername]      = useState('');
-  const [email,         setEmail]         = useState('');
-  const [age,           setAge]           = useState('');
-  const [grade,         setGrade]         = useState('');   // ← NEW
-  const [bio,           setBio]           = useState('');
-  const [learningStyle, setLearningStyle] = useState('visual');
-  const [profilePic,    setProfilePic]    = useState(null);
+  const [profile,       setProfile]       = useState(null);
+  const [subjectStyles, setSubjectStyles] = useState([]);
+  const [pointsSummary, setPointsSummary] = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [saving,        setSaving]        = useState(false);
+  const [picSaving,     setPicSaving]     = useState(false);
+  const [error,         setError]         = useState('');
+  const [success,       setSuccess]       = useState('');
 
-  /* ── Password fields ─────────────────────────────────────────────── */
-  const [oldPw,     setOldPw]     = useState('');
-  const [newPw,     setNewPw]     = useState('');
-  const [confirmPw, setConfirmPw] = useState('');
-  const [pwMsg,     setPwMsg]     = useState(null);
+  const [editName,     setEditName]     = useState('');
+  const [editUsername, setEditUsername] = useState('');
+  const [editBio,      setEditBio]      = useState('');
 
-  const fileInputRef = useRef(null);
+  const [showPwForm, setShowPwForm] = useState(false);
+  const [oldPw,      setOldPw]      = useState('');
+  const [newPw,      setNewPw]      = useState('');
+  const [confirmPw,  setConfirmPw]  = useState('');
+  const [pwError,    setPwError]    = useState('');
+  const [pwSuccess,  setPwSuccess]  = useState('');
 
-  /* ── Load profile ────────────────────────────────────────────────── */
+  const [showVark,    setShowVark]    = useState(false);
+  const [varkAnswers, setVarkAnswers] = useState({});
+  const [varkSaving,  setVarkSaving]  = useState(false);
+
   useEffect(() => {
-    if (!sid) return;
+    const params = new URLSearchParams(location.search);
+    if (params.get('retake') === 'true') setShowVark(true);
+  }, [location.search]);
+
+  useEffect(() => {
+    if (!sid) {
+      setLoading(false);
+      setError('No student ID found. Please log in again.');
+      return;
+    }
+
     Promise.all([
       api.get(`/api/students/${sid}/profile`),
-      api.get(`/api/students/${sid}/subject-performance`),
-    ]).then(([profRes, subRes]) => {
+      api.get(`/api/style/${sid}`).catch(()=>({data:[]})),
+      api.get(`/api/quiz/points/${sid}`).catch(()=>({data:[]})),
+    ]).then(([profRes, styleRes, pointsRes]) => {
       const p = profRes.data;
       setProfile(p);
-      setSubPerf(subRes.data);
-      setFullName(p.name        || '');
-      setUsername(p.username    || '');
-      setEmail(p.email          || '');
-      setAge(p.age              || '');
-      setGrade(p.grade          || '');   // ← NEW
-      setBio(p.bio              || '');
-      setLearningStyle(p.preferred_learning_style || 'visual');
-      setProfilePic(p.profile_picture || null);
+      setEditName(p.name || '');
+      setEditUsername(p.username || '');
+      setEditBio(p.bio || '');
+      setSubjectStyles(styleRes.data || []);
+      setPointsSummary(pointsRes.data || []);
+    }).catch((err) => {
+      console.error('Failed to load profile:', err);
+      setError('Failed to load profile. Please try again.');
     }).finally(() => setLoading(false));
   }, [sid]);
 
-  /* ── Profile picture selection + compression ─────────────────────── */
-  const handlePicSelect = (e) => {
+  const saveProfile = async () => {
+    if (!editName.trim()) { setError('Name is required.'); return; }
+    setSaving(true); setError(''); setSuccess('');
+    try {
+      await api.patch(`/api/students/${sid}/profile`, { name:editName.trim(), username:editUsername.trim(), bio:editBio.trim() });
+      setProfile(prev=>({...prev, name:editName, username:editUsername, bio:editBio}));
+      if (user) user.name = editName.trim(); // update context if possible
+      localStorage.setItem('sa_name', editName.trim());
+      setSuccess('Profile saved.'); setTimeout(()=>setSuccess(''),3000);
+    } catch(err){ setError(err.response?.data?.detail||'Failed to save.'); }
+    finally { setSaving(false); }
+  };
+
+  const handlePicChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      setSaveMsg({ ok: false, text: 'Image must be under 2 MB.' });
-      return;
-    }
+    if (file.size > 5*1024*1024) { setError('Image must be under 5 MB.'); return; }
+    setPicSaving(true);
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX    = 200;
-        const ratio  = Math.min(MAX / img.width, MAX / img.height);
-        canvas.width  = Math.round(img.width  * ratio);
-        canvas.height = Math.round(img.height * ratio);
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        setProfilePic(canvas.toDataURL('image/jpeg', 0.8));
-      };
-      img.src = ev.target.result;
+    reader.onload = async (ev) => {
+      const b64 = ev.target.result;
+      try {
+        await api.patch(`/api/students/${sid}/profile`, { profile_picture: b64 });
+        setProfile(prev=>({...prev, profile_picture:b64}));
+        localStorage.setItem('sa_pic', b64);
+      } catch { setError('Failed to upload picture.'); }
+      finally { setPicSaving(false); }
     };
     reader.readAsDataURL(file);
   };
 
-  /* ── Save profile ────────────────────────────────────────────────── */
-  const handleSave = async () => {
-    setSaving(true); setSaveMsg(null);
+  const changePassword = async () => {
+    setPwError(''); setPwSuccess('');
+    if (!oldPw||!newPw||!confirmPw) { setPwError('All fields required.'); return; }
+    if (newPw!==confirmPw) { setPwError('Passwords do not match.'); return; }
+    if (newPw.length<6)   { setPwError('Min 6 characters.'); return; }
     try {
-      await api.patch(`/api/students/${sid}/profile`, {
-  name:                    fullName.trim()  || null,
-  username:                username.trim()  || null,  
-  email:                   email.trim()     || null,
-  age:                     age   ? parseInt(age)   : null,
-  grade:                   grade ? parseInt(grade) : null,
-  bio:                     bio.trim()       || null,  
-  preferred_learning_style: learningStyle,
-  profile_picture:         profilePic,
-});
-      if (window.__studentName !== undefined) window.__studentName = fullName;
-      if (profilePic) window.__profilePic = profilePic;
-      setSaveMsg({ ok: true, text: 'Profile saved successfully!' });
-    } catch (err) {
-      setSaveMsg({ ok: false, text: err?.response?.data?.detail || 'Save failed. Please try again.' });
-    } finally {
-      setSaving(false);
-      setTimeout(() => setSaveMsg(null), 4000);
-    }
+      await api.post(`/api/auth/change-password/${sid}`, { old_password:oldPw, new_password:newPw });
+      setPwSuccess('Password changed!'); setOldPw(''); setNewPw(''); setConfirmPw('');
+      setTimeout(()=>{ setShowPwForm(false); setPwSuccess(''); },2000);
+    } catch(err){ setPwError(err.response?.data?.detail||'Failed.'); }
   };
 
-  /* ── Change password ─────────────────────────────────────────────── */
-  const handlePasswordChange = async () => {
-    if (newPw !== confirmPw) { setPwMsg({ ok:false, text:'Passwords do not match.' }); return; }
-    if (newPw.length < 8)    { setPwMsg({ ok:false, text:'Password must be at least 8 characters.' }); return; }
-    setPwMsg(null);
+  const submitVark = async () => {
+    if (Object.keys(varkAnswers).length<VARK_QUESTIONS.length) { setError('Please answer all questions.'); return; }
+    setVarkSaving(true);
+    const counts={visual:0,auditory:0,reading:0,kinesthetic:0};
+    Object.values(varkAnswers).forEach(s=>{if(counts[s]!==undefined)counts[s]++;});
+    const dominant=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
     try {
-      await api.post('/api/auth/change-password', {
-        student_id: sid, old_password: oldPw, new_password: newPw,
-      });
-      setPwMsg({ ok:true, text:'Password updated successfully!' });
-      setOldPw(''); setNewPw(''); setConfirmPw('');
-    } catch (err) {
-      setPwMsg({ ok:false, text: err?.response?.data?.detail || 'Password change failed.' });
-    } finally { setTimeout(() => setPwMsg(null), 4000); }
+      await api.post(`/api/style/${sid}/update`, { style:dominant });
+      setProfile(prev=>({...prev, preferred_learning_style:dominant}));
+      setShowVark(false); setVarkAnswers({});
+      setSuccess(`Learning style updated to ${STYLE_INFO[dominant]?.label||dominant}!`);
+      setTimeout(()=>setSuccess(''),4000);
+    } catch { setError('Failed to update learning style.'); }
+    finally { setVarkSaving(false); }
   };
 
   if (loading) return (
     <div className='min-h-screen bg-app flex items-center justify-center flex-col gap-4'>
-      <div className='w-12 h-12 border-4 border-teal/30 border-t-teal rounded-full animate-spin' />
-      <p className='text-muted text-sm'>Loading your profile…</p>
+      <div className='w-12 h-12 border-4 border-teal/30 border-t-teal rounded-full animate-spin'/>
+      <p className='text-muted text-sm'>Loading profile…</p>
     </div>
   );
 
-  const initials = fullName
-    ? fullName.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()
-    : '??';
+  if (error && !profile) {
+    return (
+      <PageShell title='My Profile' subtitle=''>
+        <div className='bg-red-500/10 border border-red-500/30 rounded-xl p-6 text-red-400 text-sm'>
+          {error}
+          <button onClick={() => nav('/auth')} className='mt-4 btn-ghost text-sm'>Go to Login</button>
+        </div>
+      </PageShell>
+    );
+  }
 
-  /* ══════════════════════════════════════════════════════════════════
-     RENDER
-  ══════════════════════════════════════════════════════════════════ */
+  const learningStyle = profile?.preferred_learning_style || 'reading';
+  const styleInfo     = STYLE_INFO[learningStyle] || STYLE_INFO.reading;
+  const overallFcl    = pointsSummary.length > 0
+    ? (Math.round(pointsSummary.reduce((s,p)=>s+(p.subject_fcl||1),0)/pointsSummary.length*10)/10)
+    : 1;
+
   return (
-    <PageShell title='My Profile' subtitle='Manage your personal information and preferences'>
-      <div className='max-w-4xl mx-auto space-y-6'>
+    <PageShell title='My Profile' subtitle='Manage your account and learning preferences'>
+      <div className='max-w-3xl mx-auto space-y-6'>
 
-        {/* Save toast */}
-        {saveMsg && (
-          <div className={`px-4 py-3 rounded-xl border text-sm font-medium flex items-center gap-2
-            ${saveMsg.ok
-              ? 'bg-green-500/10 border-green-500/30 text-green-400'
-              : 'bg-red-500/10  border-red-500/30  text-red-400'}`}>
-            <span>{saveMsg.ok ? '✓' : '✕'}</span> {saveMsg.text}
+        {error   && <div className='px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm'>{error}</div>}
+        {success && <div className='px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-xl text-green-400 text-sm'>{success}</div>}
+
+        {/* VARK retake modal */}
+        {showVark && (
+          <div className='fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 overflow-y-auto'>
+            <div className='card p-6 w-full max-w-lg my-4'>
+              <div className='flex justify-between items-center mb-4'>
+                <h2 className='text-primary font-bold text-lg'>Update Learning Style</h2>
+                <button onClick={()=>setShowVark(false)} className='text-muted hover:text-primary text-xl'>✕</button>
+              </div>
+              <p className='text-muted text-sm mb-5'>Answer these 5 questions to recalibrate your personalisation.</p>
+              <div className='space-y-5'>
+                {VARK_QUESTIONS.map((vq,qi)=>(
+                  <div key={qi}>
+                    <p className='text-primary text-sm font-medium mb-2'>{qi+1}. {vq.q}</p>
+                    <div className='space-y-2'>
+                      {vq.options.map((opt,oi)=>{
+                        const sel=varkAnswers[qi]===opt.style;
+                        return <button key={oi} type='button' onClick={()=>setVarkAnswers(p=>({...p,[qi]:opt.style}))}
+                          className={`w-full text-left px-4 py-2.5 rounded-lg border text-sm transition-all ${sel?'border-teal bg-teal/10 text-teal':'border-border text-muted hover:text-primary hover:border-teal/30'}`}>{opt.label}</button>;
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className='flex gap-3 mt-5'>
+                <button onClick={submitVark} disabled={varkSaving||Object.keys(varkAnswers).length<VARK_QUESTIONS.length} className='btn-primary flex-1 disabled:opacity-50'>{varkSaving?'Saving…':'Update My Style'}</button>
+                <button onClick={()=>setShowVark(false)} className='btn-ghost flex-1'>Cancel</button>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* ════════════════════════════════════════════════════════════
-            AVATAR + IDENTITY HEADER
-        ════════════════════════════════════════════════════════════ */}
+        {/* Profile card */}
         <div className='card p-6'>
-          <div className='flex items-start gap-6 flex-wrap'>
-
-            {/* Profile picture */}
-            <div className='flex flex-col items-center gap-3'>
-              <div className='relative w-24 h-24'>
-                {profilePic ? (
-                  <img src={profilePic} alt='Profile'
-                    className='w-24 h-24 rounded-full object-cover border-2 border-teal/40' />
-                ) : (
-                  <div className='w-24 h-24 rounded-full bg-teal/20 border-2 border-teal/40 flex items-center justify-center'>
-                    <span className='text-teal text-2xl font-bold stat-number'>{initials}</span>
-                  </div>
-                )}
-                <button onClick={() => fileInputRef.current?.click()}
-                  className='absolute bottom-0 right-0 w-8 h-8 rounded-full bg-teal text-app flex items-center justify-center shadow-lg hover:bg-teal/80 transition-colors'
-                  title='Change photo'>
-                  <span className='text-sm'>📷</span>
-                </button>
+          <div className='flex items-start gap-6'>
+            <div className='flex flex-col items-center gap-3 flex-shrink-0'>
+              <div className='w-24 h-24 rounded-2xl bg-teal/20 border-2 border-teal/40 overflow-hidden flex items-center justify-center'>
+                {profile?.profile_picture
+                  ? <img src={profile.profile_picture} alt='Profile' className='w-full h-full object-cover'/>
+                  : <span className='text-teal text-3xl font-bold'>{(editName||'S')[0].toUpperCase()}</span>}
               </div>
-              <button onClick={() => fileInputRef.current?.click()} className='text-teal text-xs hover:underline'>
-                Change photo
-              </button>
-              {profilePic && (
-                <button onClick={() => setProfilePic(null)} className='text-red-400 text-xs hover:underline'>
-                  Remove photo
-                </button>
-              )}
-              <input ref={fileInputRef} type='file' accept='image/png,image/jpeg,image/webp'
-                className='hidden' onChange={handlePicSelect} />
-              <p className='text-muted text-xs text-center'>PNG, JPG or WebP · max 2 MB</p>
+              <button onClick={()=>fileRef.current?.click()} disabled={picSaving} className='text-xs text-teal hover:underline disabled:opacity-50'>{picSaving?'Uploading…':'📷 Change'}</button>
+              <input ref={fileRef} type='file' accept='image/*' className='hidden' onChange={handlePicChange}/>
+              <span className='text-muted text-xs'>Grade {profile?.grade||'—'}</span>
             </div>
 
-            {/* Name + stats summary */}
-            <div className='flex-1 min-w-0'>
-              <h1 className='text-primary text-2xl font-bold mb-0.5'>{fullName || 'Your Name'}</h1>
-              <p className='text-muted text-sm mb-1'>@{username || 'username'} · {email || 'email@example.com'}</p>
-
-              {/* ✅ NEW — Grade shown here */}
-              {grade && (
-                <p className='text-teal text-xs mb-4 flex items-center gap-1'>
-                  <span>🎓</span> {gradeLabel(parseInt(grade))}
-                </p>
-              )}
-
-              <div className='grid grid-cols-3 gap-4 mt-3'>
-                <div className='bg-app border border-border rounded-lg p-3 text-center'>
-                  <p className='stat-number text-teal text-xl font-bold'>
-                    {subPerf?.overall?.avg_fcl || '—'}
-                  </p>
-                  <p className='text-muted text-xs mt-0.5'>Current FCL</p>
-                  <p className='text-muted text-xs'>{FCL_LABEL(subPerf?.overall?.avg_fcl)}</p>
-                </div>
-                <div className='bg-app border border-border rounded-lg p-3 text-center'>
-                  <p className='stat-number text-green-400 text-xl font-bold'>
-                    {subPerf?.subjects?.length || 0}
-                  </p>
-                  <p className='text-muted text-xs mt-0.5'>Enrolled Subjects</p>
-                  <button onClick={() => nav('/subjects')} className='text-teal text-xs hover:underline mt-0.5 block'>
-                    Manage →
-                  </button>
-                </div>
-                <div className='bg-app border border-border rounded-lg p-3 text-center'>
-                  <p className='stat-number text-blue-400 text-xl font-bold'>
-                    {subPerf?.overall?.avg_accuracy ? `${subPerf.overall.avg_accuracy}%` : '—'}
-                  </p>
-                  <p className='text-muted text-xs mt-0.5'>Overall Accuracy</p>
-                </div>
-              </div>
+            <div className='flex-1 grid grid-cols-2 gap-4'>
+              <div><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Full Name</label><input value={editName} onChange={e=>setEditName(e.target.value)} className='w-full bg-input border border-border rounded-lg px-4 py-2.5 text-primary text-sm focus:border-teal/60 focus:outline-none'/></div>
+              <div><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Username</label><div className='flex items-center bg-input border border-border rounded-lg px-4 py-2.5 gap-2'><span className='text-muted text-sm'>@</span><input value={editUsername} onChange={e=>setEditUsername(e.target.value.toLowerCase().replace(/\s/g,''))} className='flex-1 bg-transparent text-primary text-sm focus:outline-none'/></div></div>
+              <div><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Email</label><div className='bg-input border border-border rounded-lg px-4 py-2.5 text-muted text-sm'>{profile?.email||'—'}</div></div>
+              <div><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Overall FCL</label><div className='bg-input border border-border rounded-lg px-4 py-2.5 text-teal text-sm stat-number font-bold'>FCL {overallFcl}</div></div>
+              <div className='col-span-2'><label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Bio</label><textarea value={editBio} onChange={e=>setEditBio(e.target.value)} rows={2} placeholder='Tell us about yourself…' className='w-full bg-input border border-border rounded-lg px-4 py-2.5 text-primary text-sm focus:border-teal/60 focus:outline-none resize-none'/></div>
             </div>
           </div>
-        </div>
 
-        {/* ════════════════════════════════════════════════════════════
-            PERSONAL INFORMATION
-        ════════════════════════════════════════════════════════════ */}
-        <Section title='Personal Information'>
-          <div className='grid grid-cols-2 gap-4 mb-4'>
-            <Field label='Full Name'     value={fullName} onChange={setFullName} placeholder='Enter your full name' />
-            <Field label='Username'      value={username} onChange={setUsername} placeholder='Your login username'
-              hint='Used to log in to SiveAdapt' />
-            <Field label='Email Address' type='email' value={email} onChange={setEmail} placeholder='student@example.com' />
-            <Field label='Age'           type='number' value={age} onChange={setAge} placeholder='e.g. 20' />
+          <div className='flex justify-end gap-3 mt-5 pt-5 border-t border-border'>
+            <button onClick={()=>setShowPwForm(!showPwForm)} className='btn-ghost text-sm'>🔒 Change Password</button>
+            <button onClick={saveProfile} disabled={saving} className='btn-primary text-sm disabled:opacity-50'>{saving?'Saving…':'Save Changes'}</button>
+          </div>
 
-            {/* ✅ NEW — Grade selector (full width, same grouped style as Register) */}
-            <div className='col-span-2'>
-              <label className='block text-muted text-xs font-medium uppercase tracking-wide mb-1.5'>
-                Grade / Year Level
-              </label>
-              <select
-                value={grade}
-                onChange={e => setGrade(e.target.value)}
-                className='w-full bg-app border border-border rounded-lg px-4 py-2.5 text-primary text-sm
-                  focus:outline-none focus:border-teal transition-colors'
-              >
-                <option value=''>— Select your grade / year —</option>
-                {GRADE_GROUPS.map(group => (
-                  <optgroup key={group.group} label={group.group}>
-                    {group.options.map(opt => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </optgroup>
+          {showPwForm && (
+            <div className='mt-4 p-4 bg-app border border-border rounded-xl'>
+              <h4 className='text-primary font-semibold text-sm mb-3'>Change Password</h4>
+              <div className='grid grid-cols-3 gap-3'>
+                {[['Current Password',oldPw,setOldPw],['New Password',newPw,setNewPw],['Confirm New',confirmPw,setConfirmPw]].map(([l,v,set])=>(
+                  <div key={l}><label className='text-muted text-xs block mb-1'>{l}</label><input type='password' value={v} onChange={e=>set(e.target.value)} className='w-full bg-input border border-border rounded-lg px-3 py-2 text-primary text-sm focus:outline-none'/></div>
                 ))}
-              </select>
-              {grade && (
-                <p className='text-teal text-xs mt-1 flex items-center gap-1'>
-                  <span>🎓</span> {gradeLabel(parseInt(grade))}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Bio */}
-          <div>
-            <label className='block text-muted text-xs font-medium uppercase tracking-wide mb-1.5'>
-              Bio / About Me
-            </label>
-            <textarea
-              value={bio} onChange={e => setBio(e.target.value)}
-              placeholder='A short description about yourself, your goals, or interests…'
-              rows={3}
-              className='w-full bg-app border border-border rounded-lg px-4 py-2.5 text-primary text-sm
-                placeholder-muted/50 focus:outline-none focus:border-teal transition-colors resize-none'
-            />
-          </div>
-        </Section>
-
-        {/* ════════════════════════════════════════════════════════════
-            PREFERRED LEARNING STYLE (VARK)
-        ════════════════════════════════════════════════════════════ */}
-        <Section title='Preferred Learning Style'>
-          <p className='text-muted text-xs mb-4'>
-            This tells the AI Tutor how to present content to match the way you learn best.
-            You can change this any time.
-          </p>
-          <div className='grid grid-cols-2 gap-3'>
-            {LEARNING_STYLES.map(style => (
-              <button key={style.value} onClick={() => setLearningStyle(style.value)}
-                className={`p-4 rounded-xl border text-left transition-all ${
-                  learningStyle === style.value
-                    ? 'border-teal bg-teal/10'
-                    : 'border-border hover:border-border/80 hover:bg-border/20'
-                }`}>
-                <div className='flex items-center gap-3 mb-1'>
-                  <span className='text-xl'>{style.icon}</span>
-                  <span className={`text-sm font-semibold ${learningStyle === style.value ? 'text-teal' : 'text-primary'}`}>
-                    {style.label}
-                  </span>
-                  {learningStyle === style.value && <span className='ml-auto text-teal text-sm'>✓</span>}
-                </div>
-                <p className='text-muted text-xs leading-relaxed'>{style.desc}</p>
-              </button>
-            ))}
-          </div>
-        </Section>
-
-        {/* ════════════════════════════════════════════════════════════
-            MY SUBJECTS
-        ════════════════════════════════════════════════════════════ */}
-        <Section title='My Subjects'>
-          {(subPerf?.subjects || []).length > 0 ? (
-            <div className='space-y-2 mb-4'>
-              {subPerf.subjects.map((s, i) => (
-                <div key={s.subject_code}
-                  className='flex items-center justify-between py-2 border-b border-border/50 last:border-0'>
-                  <div className='flex items-center gap-3'>
-                    <span className='w-2.5 h-2.5 rounded-full flex-shrink-0'
-                      style={{ background: ['#00D4C8','#3B82F6','#8B5CF6','#F59E0B','#10B981'][i%5] }} />
-                    <div>
-                      <p className='text-primary text-sm font-medium'>{s.subject_name}</p>
-                      <p className='text-muted text-xs'>{s.subject_code}</p>
-                    </div>
-                  </div>
-                  <div className='flex items-center gap-3 text-xs'>
-                    {s.fcl_level && <span className='stat-number text-teal'>FCL {s.fcl_level}</span>}
-                    <span className={`font-medium ${
-                      s.performance_label === 'Excellent' ? 'text-green-400' :
-                      s.performance_label === 'Good'      ? 'text-amber-400' : 'text-red-400'
-                    }`}>{s.performance_label}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className='text-muted text-sm mb-4'>You are not enrolled in any subjects yet.</p>
-          )}
-          <button onClick={() => nav('/subjects')} className='btn-ghost text-xs'>
-            Manage subjects →
-          </button>
-        </Section>
-
-        {/* ════════════════════════════════════════════════════════════
-            ACCOUNT SETTINGS
-        ════════════════════════════════════════════════════════════ */}
-        <Section title='Account Settings'>
-          <div className='space-y-3 mb-4'>
-            <Field label='Email (login / contact)' type='email' value={email} onChange={setEmail}
-              placeholder='student@example.com'
-              hint='Your email is used to contact you and recover your account' />
-            <Field label='Username (used to log in)' value={username} onChange={setUsername}
-              placeholder='e.g. sipho_dlamini' />
-          </div>
-        </Section>
-
-        {/* ════════════════════════════════════════════════════════════
-            CHANGE PASSWORD
-        ════════════════════════════════════════════════════════════ */}
-        <Section title='Change Password'>
-          {pwMsg && (
-            <div className={`mb-4 px-4 py-2.5 rounded-lg border text-sm flex items-center gap-2
-              ${pwMsg.ok
-                ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                : 'bg-red-500/10  border-red-500/30  text-red-400'}`}>
-              <span>{pwMsg.ok ? '✓' : '✕'}</span> {pwMsg.text}
+              </div>
+              {pwError   && <p className='text-red-400 text-xs mt-2'>{pwError}</p>}
+              {pwSuccess && <p className='text-green-400 text-xs mt-2'>{pwSuccess}</p>}
+              <button onClick={changePassword} className='btn-primary text-sm mt-3'>Update Password</button>
             </div>
           )}
-          <div className='space-y-3 mb-4'>
-            <Field label='Current Password'    type='password' value={oldPw}     onChange={setOldPw}     placeholder='Enter current password' />
-            <Field label='New Password'         type='password' value={newPw}     onChange={setNewPw}     placeholder='Min 8 characters' />
-            <Field label='Confirm New Password' type='password' value={confirmPw} onChange={setConfirmPw} placeholder='Repeat new password' />
-          </div>
-          {confirmPw && (
-            <p className={`text-xs mb-3 flex items-center gap-1 ${newPw === confirmPw ? 'text-green-400' : 'text-red-400'}`}>
-              <span>{newPw === confirmPw ? '✓' : '✕'}</span>
-              {newPw === confirmPw ? 'Passwords match' : 'Passwords do not match'}
-            </p>
-          )}
-          <button onClick={handlePasswordChange} className='btn-ghost text-sm'>
-            Update Password
-          </button>
-        </Section>
-
-        {/* ── Sticky save bar ───────────────────────────────────────── */}
-        <div className='flex items-center justify-between py-4 sticky bottom-0 bg-app/90 backdrop-blur border-t border-border px-1'>
-          <p className='text-muted text-xs'>Changes are saved to your SiveAdapt account</p>
-          <button onClick={handleSave} disabled={saving}
-            className='btn-primary text-sm px-8 flex items-center gap-2'>
-            {saving ? (
-              <><div className='w-4 h-4 border-2 border-app/30 border-t-app rounded-full animate-spin' />Saving…</>
-            ) : 'Save Profile'}
-          </button>
         </div>
 
+        {/* Learning style */}
+        <div className='card p-5'>
+          <div className='flex items-center justify-between mb-4'>
+            <div><h3 className='text-primary font-semibold'>Learning Style</h3><p className='text-muted text-xs mt-0.5'>How SiveAdapt personalises your content</p></div>
+            <button onClick={()=>setShowVark(true)} className='btn-ghost text-xs'>🔄 Retake Assessment</button>
+          </div>
+          <div className='flex items-start gap-4 p-4 bg-app border border-border rounded-xl mb-4'>
+            <span className='text-3xl'>{styleInfo.icon}</span>
+            <div><div className='flex items-center gap-2 mb-1'><span className={`font-semibold text-sm ${styleInfo.color}`}>{styleInfo.label} Learner</span><span className='badge-teal text-xs'>Overall</span></div><p className='text-muted text-xs leading-relaxed'>{styleInfo.desc}</p></div>
+          </div>
+          {subjectStyles.length > 0 && (
+            <div className='space-y-2'>
+              <p className='text-muted text-xs uppercase tracking-wide mb-2'>Per-subject</p>
+              {subjectStyles.map(s=>{
+                const si=STYLE_INFO[s.learning_style]||STYLE_INFO.reading;
+                return (
+                  <div key={s.subject_id} className='flex items-center justify-between px-3 py-2 bg-app border border-border rounded-lg'>
+                    <span className='text-primary text-xs font-medium'>{s.subject_name}</span>
+                    <div className='flex items-center gap-2'><span className='text-sm'>{si.icon}</span><span className={`text-xs ${si.color}`}>{si.label}</span>{s.auto_detected&&<span className='text-muted text-xs'>(auto)</span>}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Subject FCL progress */}
+        {pointsSummary.length > 0 && (
+          <div className='card p-5'>
+            <h3 className='text-primary font-semibold mb-4'>Subject Progress</h3>
+            <div className='space-y-4'>
+              {pointsSummary.map(s=>{
+                const pct=Math.min(100,Math.round((s.total_points%1000)/1000*100));
+                return (
+                  <div key={s.subject_id}>
+                    <div className='flex items-center justify-between mb-1.5'>
+                      <div className='flex items-center gap-2'><span className='text-primary text-xs font-medium'>{s.subject_name}</span><span className='badge-teal text-xs stat-number'>FCL {s.subject_fcl}</span></div>
+                      <button onClick={()=>nav(`/subjects/${s.subject_id}`)} className='text-teal text-xs hover:underline'>Details →</button>
+                    </div>
+                    <div className='w-full bg-border rounded-full h-2'><div className='h-2 rounded-full bg-teal transition-all duration-700' style={{width:`${pct}%`}}/></div>
+                    <p className='text-muted text-xs mt-1'>{s.total_points%1000}/1000 pts to next FCL · {s.total_points} total earned</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className='flex gap-3'>
+          <button onClick={()=>nav('/dashboard')} className='btn-ghost text-sm'>← Dashboard</button>
+          <button onClick={()=>nav('/library')}   className='btn-ghost text-sm'>📚 Library</button>
+          <button onClick={()=>nav('/progress')}  className='btn-ghost text-sm'>📊 Progress</button>
+        </div>
       </div>
     </PageShell>
   );

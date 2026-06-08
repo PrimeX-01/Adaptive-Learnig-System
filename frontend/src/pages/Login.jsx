@@ -17,22 +17,25 @@ export default function Login() {
       window.__authToken   = data.access_token;
       window.__studentId   = data.student_id;
       window.__isTeacher   = data.is_teacher;
+      window.__isAdmin     = data.is_admin || false;     
       window.__studentName = data.name;
       window.__profilePic  = data.profile_picture || null;
 
-
-      //persist session so F5 doesn't log the user out
       localStorage.setItem('sa_token',     data.access_token);
       localStorage.setItem('sa_studentId', data.student_id);
       localStorage.setItem('sa_isTeacher', data.is_teacher);
+      localStorage.setItem('sa_isAdmin',   data.is_admin || false);
       localStorage.setItem('sa_name',      data.name);
       localStorage.setItem('sa_pic',       data.profile_picture || '');
 
-
-      nav(data.is_teacher ? '/teacher' : '/dashboard');
-
+      if (data.is_admin) {
+        nav('/admin');
+      } else if (data.is_teacher) {
+        nav('/teacher');
+      } else {
+        nav('/dashboard');
+      }
     } catch(err) {
-      //  Reads the specific message from the backend instead of a generic one
       setError(err?.response?.data?.detail || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
@@ -46,8 +49,6 @@ export default function Login() {
       </div>
 
       <div className='relative w-full max-w-md'>
-
-        {/* ── Brand header ── */}
         <div className='text-center mb-8'>
           <div className='inline-flex w-12 h-12 rounded-xl bg-teal/10 border border-teal/30 items-center justify-center mb-4'>
             <span className='text-teal font-bold text-lg'>SA</span>
@@ -57,10 +58,7 @@ export default function Login() {
           <p className='text-muted text-xs mt-0.5'>University of Eswatini</p>
         </div>
 
-        {/* ── Login card ── */}
         <div className='card p-8'>
-
-          {/* Error message  shows specific backend message */}
           {error && (
             <div className='mb-4 px-3 py-2.5 bg-red-500/10 border border-red-500/30 rounded-lg
               flex items-center gap-2 text-red-400 text-sm'>
@@ -71,8 +69,6 @@ export default function Login() {
 
           <form onSubmit={e => { e.preventDefault(); handleLogin(); }}>
             <div className='space-y-4'>
-
-              {/* Email */}
               <div>
                 <label className='text-muted text-xs font-medium block mb-1.5 uppercase tracking-wide'>
                   Email Address
@@ -89,20 +85,10 @@ export default function Login() {
                 />
               </div>
 
-              {/* Password */}
               <div>
-                <div className='flex items-center justify-between mb-1.5'>
-                  <label className='text-muted text-xs font-medium uppercase tracking-wide'>
-                    Password
-                  </label>
-                  {/* Forgot password link */}
-                  <Link
-                    to='/forgot-password'
-                    className='text-teal text-xs hover:underline'
-                  >
-                    Forgot password?
-                  </Link>
-                </div>
+                <label className='text-muted text-xs font-medium uppercase tracking-wide mb-1.5 block'>
+                  Password
+                </label>
                 <input
                   type='password'
                   value={password}

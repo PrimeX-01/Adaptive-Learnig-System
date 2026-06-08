@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from db.database import get_db
-from db.models import active_sessions
+from db.models import ActiveSession
 from services.fcl_service import award_topic_points
 from auth import get_current_student
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 router = APIRouter(prefix='/api/session', tags=['Session'])
 
@@ -17,54 +17,9 @@ class StartSessionRequest(BaseModel):
 class HeartbeatRequest(BaseModel):
     session_id: int
 
-@router.post('/start')
-def start_session(req: StartSessionRequest, db: Session = Depends(get_db),
-                  current_user = Depends(get_current_student)):
-    # End any open sessions of the same type (optional)
-    active = db.query(active_sessions).filter(
-        active_sessions.student_id == current_user.id,
-        active_sessions.session_type == req.session_type,
-        active_sessions.ended == False
-    ).first()
-    if active:
-        # auto-close previous session (e.g., browser refresh)
-        end_session_internal(active, db)
-    session = active_sessions(
-        student_id=current_user.id,
-        session_type=req.session_type,
-        topic_id=req.topic_id,
-        subject_id=req.subject_id,
-        start_time=datetime.utcnow(),
-        last_heartbeat=datetime.utcnow(),
-        total_seconds=0
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return {'session_id': session.id}
-
-@router.post('/heartbeat')
-def heartbeat(req: HeartbeatRequest, db: Session = Depends(get_db),
-              current_user = Depends(get_current_student)):
-    session = db.query(active_sessions).filter(
-        active_sessions.id == req.session_id,
-        active_sessions.student_id == current_user.id,
-        active_sessions.ended == False
-    ).first()
-    if not session:
-        raise HTTPException(404, 'Active session not found')
-    now = datetime.utcnow()
-    elapsed = (now - session.last_heartbeat).total_seconds()
-    if elapsed > 0:
-        session.total_seconds += elapsed
-    session.last_heartbeat = now
-    db.commit()
-    return {'status': 'ok'}
-
-def end_session_internal(session: active_sessions, db: Session):
-    now = datetime.utcnow()
+def end_session_internal(session: ActiveSession, db: Session):
+    now = datetime.now(timezone.utc)
     if not session.ended:
-        # Add final elapsed time
         elapsed = (now - session.last_heartbeat).total_seconds()
         if elapsed > 0:
             session.total_seconds += elapsed
@@ -85,12 +40,56 @@ def end_session_internal(session: active_sessions, db: Session):
                 db=db
             )
 
+@router.post('/start')
+def start_session(req: StartSessionRequest, db: Session = Depends(get_db),
+                  current_user = Depends(get_current_student)):
+    # End any open session of the same type (prevents duplicates)
+    existing = db.query(ActiveSession).filter(
+        ActiveSession.student_id == current_user.id,
+        ActiveSession.session_type == req.session_type,
+        ActiveSession.ended == False
+    ).first()
+    if existing:
+        end_session_internal(existing, db)
+
+    new_session = ActiveSession(
+        student_id=current_user.id,
+        session_type=req.session_type,
+        topic_id=req.topic_id,
+        subject_id=req.subject_id,
+        start_time=datetime.now(timezone.utc),
+        last_heartbeat=datetime.now(timezone.utc),
+        total_seconds=0
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    return {'session_id': new_session.id}
+
+@router.post('/heartbeat')
+def heartbeat(req: HeartbeatRequest, db: Session = Depends(get_db),
+              current_user = Depends(get_current_student)):
+    session = db.query(ActiveSession).filter(
+        ActiveSession.id == req.session_id,
+        ActiveSession.student_id == current_user.id,
+        ActiveSession.ended == False
+    ).first()
+    if not session:
+        raise HTTPException(404, 'Active session not found')
+    now = datetime.now(timezone.utc)
+    elapsed = (now - session.last_heartbeat).total_seconds()
+    if elapsed > 0:
+        session.total_seconds += elapsed
+    session.last_heartbeat = now
+    db.commit()
+    return {'status': 'ok'}
+
 @router.post('/end')
 def end_session(req: HeartbeatRequest, db: Session = Depends(get_db),
                 current_user = Depends(get_current_student)):
-    session = db.query(active_sessions).filter(
-        active_sessions.id == req.session_id,
-        active_sessions.student_id == current_user.id
+    session = db.query(ActiveSession).filter(
+        ActiveSession.id == req.session_id,
+        ActiveSession.student_id == current_user.id
     ).first()
     if not session:
         raise HTTPException(404, 'Session not found')

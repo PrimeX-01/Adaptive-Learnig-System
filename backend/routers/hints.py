@@ -14,7 +14,7 @@ class HintRecordRequest(BaseModel):
     hint_level:  int
     subject_id:  int = None
 
-# ── Record only (kept for compatibility) ──────────────────────────
+# ── Record only ──────────────────────────────────────────
 @router.post('/request')
 def record_hint(req: HintRecordRequest, db: Session = Depends(get_db),
                 current_user = Depends(get_current_student)):
@@ -37,13 +37,19 @@ def get_hint(question_id: str, level: int, request: Request,
     if level not in (1, 2, 3):
         raise HTTPException(400, 'Hint level must be 1, 2, or 3')
 
-    # Generate hint via Groq LLM
+    # Generate hint – the generate_hint function expects these exact arguments
     hint = generate_hint(
-        f'Question {question_id}', '', topic, fcl_level, level,
-        request.app.state, db, student_id
+        question_text=f'Question about {topic}',
+        correct_answer='',
+        topic=topic,
+        fcl_level=fcl_level,
+        hint_level=level,
+        app_state=request.app.state,
+        db=db,
+        student_id=student_id
     )
 
-    # ✅ FIXED — now also records the hint request in the database
+    # Record the hint request in database
     if student_id:
         db.add(HintRequestModel(
             student_id=student_id,

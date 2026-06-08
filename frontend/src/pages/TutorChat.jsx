@@ -1,410 +1,451 @@
 import { useState, useEffect, useRef } from 'react';
-import ReactMarkdown from 'react-markdown';
-import rehypeHighlight from 'rehype-highlight';
-import { InlineMath, BlockMath } from 'react-katex';
-import 'katex/dist/katex.min.css';
-import mermaid from 'mermaid';
+import { useAuth } from '../contexts/AuthContext';
 import Sidebar from '../components/Sidebar';
-import NotificationsPanel from '../components/NotificationsPanel';
-import { useTTS } from '../hooks/useTTS';
-import { useSpeechInput } from '../hooks/useSpeechInput';
+import Navbar  from '../components/Navbar';
+import { sendTutorMessage, getChatHistory } from '../services/tutor';
+import { getSubjects } from '../services/student';
 import api from '../services/api';
-import { useNavigate } from 'react-router-dom';
+import styles from './TutorChat.module.css';
+
+// Rich content rendering imports
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+import 'highlight.js/styles/github-dark.css';
+import mermaid from 'mermaid';
+import 'katex/dist/katex.min.css';
+import { InlineMath, BlockMath } from 'react-katex';
+import AudioPlayer from '../components/AudioPlayer';
 
 mermaid.initialize({
-  startOnLoad: false, theme: 'dark',
+  startOnLoad: false,
+  theme: 'dark',
   themeVariables: {
-    primaryColor: '#00D4C8', background: '#0F172A', mainBkg: '#0F172A',
-    nodeBorder: '#1E293B', labelBackground: '#0F172A', edgeLabelBackground: '#0F172A',
+    primaryColor: '#00D4C8',
+    background: '#0F172A',
+    mainBkg: '#0F172A',
+    nodeBorder: '#1E293B',
+    labelBackground: '#0F172A',
+    edgeLabelBackground: '#0F172A',
   },
 });
 
-const SUBJECT_TOPICS = {
-  MATH: { name: 'Mathematics',      topics: ['mathematics_algebra','mathematics_geometry','mathematics_calculus','mathematics_statistics'] },
-  SCI:  { name: 'Science',          topics: ['science_biology','science_chemistry','science_physics'] },
-  ENG:  { name: 'English',          topics: ['english_comprehension','english_writing','english_literature'] },
-  SOC:  { name: 'Social Studies',   topics: ['social_studies','civics'] },
-  CS:   { name: 'Computer Science', topics: ['computer_science','programming'] },
-};
-
-function gradeToFCL(grade) {
-  if (!grade || grade <= 0) return 6;
-  if (grade <= 4)  return 2;
-  if (grade <= 7)  return 4;
-  if (grade <= 9)  return 6;
-  if (grade <= 12) return 8;
-  if (grade <= 15) return 9;
-  if (grade <= 17) return 11;
-  return 13;
+// Helper: split content into segments (mermaid, math, text)
+function splitContent(content) {
+  const segments = [];
+  let remaining = content;
+  const mermaidRegex = /```mermaid\n([\s\S]*?)\n```/g;
+  const blockMathRegex = /\$\$([\s\S]*?)\$\$/g;
+  const inlineMathRegex = /(?<!\$)\$(?!\$)([^\$]+?)\$(?!\$)/g;
+  const matches = [];
+  let match;
+  while ((match = mermaidRegex.exec(remaining)) !== null) {
+    matches.push({ type: 'mermaid', content: match[1], index: match.index, end: match.index + match[0].length });
+  }
+  while ((match = blockMathRegex.exec(remaining)) !== null) {
+    matches.push({ type: 'math_block', content: match[1], index: match.index, end: match.index + match[0].length });
+  }
+  while ((match = inlineMathRegex.exec(remaining)) !== null) {
+    matches.push({ type: 'math_inline', content: match[1], index: match.index, end: match.index + match[0].length });
+  }
+  matches.sort((a,b) => a.index - b.index);
+  let pos = 0;
+  for (const m of matches) {
+    if (m.index > pos) {
+      const text = remaining.slice(pos, m.index);
+      if (text.trim()) segments.push({ type: 'text', content: text });
+    }
+    segments.push({ type: m.type, content: m.content });
+    pos = m.end;
+  }
+  if (pos < remaining.length) {
+    const text = remaining.slice(pos);
+    if (text.trim()) segments.push({ type: 'text', content: text });
+  }
+  return segments;
 }
 
-function MsgBubble({ msg, onSpeak, imageUrl, youtubeLink }) {
+function MermaidDiagram({ code }) {
   const ref = useRef(null);
-
   useEffect(() => {
-    if (!ref.current) return;
-    ref.current.querySelectorAll('code.language-mermaid').forEach(async block => {
+    if (ref.current && code) {
       try {
-        const { svg } = await mermaid.render('d' + Date.now(), block.textContent);
-        const w = document.createElement('div');
-        w.innerHTML = svg;
-        w.className = 'my-4 overflow-x-auto';
-        block.parentElement.replaceWith(w);
-      } catch {}
-    });
-  }, [msg.content]);
+        mermaid.render('mermaid_' + Date.now() + Math.random(), code).then(({ svg }) => {
+          if (ref.current) ref.current.innerHTML = svg;
+        }).catch(err => {
+          console.error('Mermaid error:', err);
+          if (ref.current) ref.current.innerHTML = '<p class="text-red-400 text-sm">Diagram could not be rendered.</p>';
+        });
+      } catch (err) { console.error(err); }
+    }
+  }, [code]);
+  return <div ref={ref} className="my-4 overflow-x-auto flex justify-center" />;
+}
 
-  const comps = {
-    code({ className, children }) {
-      if (className === 'language-math') return <InlineMath math={String(children)} />;
-      if (className === 'language-Math') return <BlockMath  math={String(children)} />;
-      return <code className={className}>{children}</code>;
-    },
-  };
-
-  const isAI = msg.role === 'assistant';
+function MessageContent({ content }) {
+  if (!content) return null;
+  if (content.includes('```mermaid') || content.includes('$$')) {
+    const segments = splitContent(content);
+    return (
+      <div className="space-y-3">
+        {segments.map((seg, idx) => {
+          if (seg.type === 'mermaid') {
+            return <MermaidDiagram key={idx} code={seg.content} />;
+          } else if (seg.type === 'math_block') {
+            return <BlockMath key={idx} math={seg.content} />;
+          } else if (seg.type === 'math_inline') {
+            return <InlineMath key={idx} math={seg.content} />;
+          } else {
+            return (
+              <ReactMarkdown key={idx} remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                {seg.content}
+              </ReactMarkdown>
+            );
+          }
+        })}
+      </div>
+    );
+  }
   return (
-    <div className={`flex gap-3 mb-4 ${isAI ? 'justify-start' : 'justify-end'}`}>
-      {isAI && (
-        <div className='w-8 h-8 rounded-lg bg-teal/15 border border-teal/30 flex items-center justify-center text-teal text-xs font-bold flex-shrink-0 mt-1'>
-          AI
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+function MessageBubble({ msg }) {
+  const isUser = msg.role === 'user';
+  return (
+    <div className={`${styles.bubble} ${isUser ? styles.userBubble : styles.aiBubble}`}>
+      {!isUser && <div className={styles.bubbleAvatar}>🤖</div>}
+      <div className={`${styles.bubbleContent} ${msg.error ? styles.errorBubble : ''}`}>
+        <div className={styles.bubbleText}>
+          {msg.streaming ? (
+            msg.content || <span className={styles.cursor} />
+          ) : (
+            <MessageContent content={msg.content} />
+          )}
         </div>
-      )}
-      <div
-        ref={ref}
-        className={`max-w-2xl rounded-2xl px-4 py-3 text-sm leading-relaxed
-          ${isAI ? 'bg-card border border-border' : 'bg-teal/10 border border-teal/30'}`}
-      >
-        <ReactMarkdown rehypePlugins={[rehypeHighlight]} components={comps}>
-          {msg.content}
-        </ReactMarkdown>
-        
-        {imageUrl && (
-          <div className="mt-3">
-            <img src={imageUrl} alt="AI generated illustration" className="rounded-lg max-w-full border border-teal/30" />
+        {msg.streaming && <span className={styles.cursor} />}
+        {!isUser && !msg.streaming && msg.content && (
+          <div className="mt-3 pt-2 border-t border-border/40">
+            <AudioPlayer text={msg.content} label="🔊 Read aloud" />
           </div>
-        )}
-        
-        {youtubeLink && (
-          <div className="mt-3">
-            <a href={youtubeLink} target="_blank" rel="noopener noreferrer"
-               className="text-teal text-sm hover:underline flex items-center gap-1">
-              🎥 Watch related video on YouTube
-            </a>
-          </div>
-        )}
-        
-        {isAI && (
-          <button
-            onClick={() => onSpeak(msg.content)}
-            className='mt-2 text-xs text-muted hover:text-teal flex items-center gap-1 transition-colors'
-          >
-            🔊 Read aloud
-          </button>
         )}
       </div>
     </div>
   );
 }
 
+function SendIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <line x1="22" y1="2" x2="11" y2="13"/>
+      <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+    </svg>
+  );
+}
+
+function SpinnerIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={styles.spinner}>
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+    </svg>
+  );
+}
+
 export default function TutorChat() {
-  const navigate = useNavigate();
-  const sid      = window.__studentId;
-
-  const [enrolled,    setEnrolled]    = useState([]);
-  const [subjectCode, setSubjectCode] = useState('MATH');
-  const [topic,       setTopic]       = useState('mathematics_algebra');
-  const [subjectId,   setSubjectId]   = useState(null);
-  const [messages,    setMessages]    = useState([{
-    role: 'assistant',
-    content: 'Hello! I am your AI tutor. Select a subject and topic above, then ask me anything.',
-  }]);
-  const [input,        setInput]        = useState('');
-  const [sessionId,    setSessionId]    = useState(null);
-  const [sending,      setSending]      = useState(false);
-  const [autoRead,     setAutoRead]     = useState(false);
-  const [fcl,          setFCL]          = useState(6);
-  const [unread,       setUnread]       = useState(0);
-  const [learningStyle, setLearningStyle] = useState('reading');
-
+  const { user } = useAuth();
+  const [messages, setMessages]   = useState([]);
+  const [input, setInput]         = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const [sideOpen, setSideOpen]   = useState(false);
+  const [subjects, setSubjects]   = useState([]);
+  const [subjectId, setSubjectId] = useState('');
+  const [aiStatus, setAiStatus]   = useState('checking');
+  const [socraticMode, setSocraticMode] = useState(() => {
+    const saved = localStorage.getItem('socratic_mode');
+    return saved === 'true';
+  });
+  const [historySessions, setHistorySessions] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
   const bottomRef = useRef(null);
-  const { speak, stop, speaking, rate, setRate } = useTTS();
-  const { startListening, stopListening, listening } = useSpeechInput(t => setInput(t));
+  const inputRef  = useRef(null);
 
-  const isStudyModeRef = useRef(false);
-
-  // Load enrolled subjects + profile + learning style
   useEffect(() => {
-    Promise.all([
-      api.get(`/api/subjects/enrolled/${sid}`),
-      api.get(`/api/students/${sid}/profile`),
-      api.get(`/api/messages/inbox/${sid}`),
-    ]).then(([enrollRes, profRes, inboxRes]) => {
-      const enrollments  = enrollRes.data || [];
-      const studentGrade = profRes.data?.grade || null;
-      const style = profRes.data?.preferred_learning_style || 'reading';
+    localStorage.setItem('socratic_mode', socraticMode);
+  }, [socraticMode]);
 
-      setEnrolled(enrollments);
-      setUnread(inboxRes.data.filter(m => !m.is_read).length);
-      setLearningStyle(style);
-
-      if (enrollments.length > 0) {
-        const first = enrollments[0];
-        setSubjectCode(first.subject_code);
-        setSubjectId(first.subject_id);
-        setFCL(first.fcl_level || gradeToFCL(studentGrade));
-        const firstTopic = SUBJECT_TOPICS[first.subject_code]?.topics[0] || 'mathematics_algebra';
-        setTopic(firstTopic);
-      }
-    }).catch(() => {});
-  }, [sid]);
-
-  // Restore library study session (runs once on mount)
-  useEffect(() => {
-    const studyData = localStorage.getItem('ai_study_session');
-    if (studyData) {
-      try {
-        const { sessionId: storedSessionId, contentTitle, initialResponse } = JSON.parse(studyData);
-        setSessionId(storedSessionId);
-        setMessages([{ role: 'assistant', content: initialResponse }]);
-        isStudyModeRef.current = true;
-        localStorage.removeItem('ai_study_session');
-      } catch (e) {
-        console.error('Failed to parse study session data:', e);
-      }
+  const loadHistory = async () => {
+    try {
+      const res = await api.get('/api/chat/history');
+      setHistorySessions(res.data || []);
+    } catch (err) {
+      console.error('Failed to load chat history:', err);
     }
+  };
+
+  useEffect(() => {
+    getSubjects().then(s => setSubjects(s ?? [])).catch(() => {});
+    loadHistory();
   }, []);
 
-  // Start a new chat session when subject changes (unless we are in study mode)
+  const loadSessionMessages = (session) => {
+    const msgs = session.messages || [];
+    setMessages(msgs);
+    setCurrentSessionId(session.session_id);
+    setShowHistory(false);
+  };
+
+  const startNewSession = async () => {
+    setMessages([]);
+    setCurrentSessionId(null);
+  };
+
   useEffect(() => {
-    if (!subjectId) return;
-    if (isStudyModeRef.current) {
-      isStudyModeRef.current = false;
-      return;
-    }
-    api.post('/api/chat/new-session', { student_id: sid, subject_id: subjectId })
-       .then(r => setSessionId(r.data.session_id))
-       .catch(() => {});
-  }, [subjectId, sid]);
+    const checkAI = async () => {
+      try {
+        const res = await api.get('/api/health/ai');
+        if (res.data.status === 'connected') setAiStatus('connected');
+        else setAiStatus('disconnected');
+      } catch {
+        setAiStatus('disconnected');
+      }
+    };
+    checkAI();
+    const interval = setInterval(checkAI, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  function handleSubjectChange(code) {
-    setSubjectCode(code);
-    const e = enrolled.find(x => x.subject_code === code);
-    if (e) {
-      setSubjectId(e.subject_id);
-      setFCL(e.fcl_level || 6);
-    }
-    const firstTopic = SUBJECT_TOPICS[code]?.topics[0] || 'mathematics_algebra';
-    setTopic(firstTopic);
-    setMessages([{
-      role: 'assistant',
-      content: `Switched to ${e?.subject_name || code}. What would you like to learn?`,
-    }]);
-  }
-
-  async function sendMessage() {
-    if (!input.trim() || sending) return;
-
-    if (!sessionId) {
-      setMessages(m => [...m, {
-        role: 'assistant',
-        content: 'Session not ready yet. Please wait a moment and try again.',
-      }]);
-      return;
-    }
-
-    const userMsg = { role: 'user', content: input };
-    setMessages(m => [...m, userMsg]);
+  const sendMessage = async () => {
+    let text = input.trim();
+    if (!text || streaming || aiStatus !== 'connected') return;
     setInput('');
-    setSending(true);
 
-    try {
-      const { data } = await api.post('/api/chat/message', {
-        session_id: sessionId,
-        student_id: sid,
-        message:    input,
-        topic,
-        fcl_level:  fcl,
-        learning_style: learningStyle,
-      });
-      
-      const aiMsg = {
-        role: 'assistant',
-        content: data.response,
-        image_url: data.image_url,
-        youtube_link: data.youtube_link
-      };
-      setMessages(m => [...m, aiMsg]);
-      if (autoRead) speak(data.response);
-    } catch {
-      setMessages(m => [...m, {
-        role: 'assistant',
-        content: 'Sorry, I could not reach the server. Please try again.',
-      }]);
-    } finally {
-      setSending(false);
+    if (socraticMode) {
+      text += "\n\n[Instruction: Please respond in Socratic mode. Do NOT give me the answer directly. Instead, ask me guiding questions that help me discover the answer myself. Break down the problem step by step through questions.]";
     }
-  }
 
-  const currentTopics = SUBJECT_TOPICS[subjectCode]?.topics || [];
+    const userMsg = { role: 'user', content: text, ts: Date.now() };
+    setMessages(prev => [...prev, userMsg]);
 
-  const headerActions = (
-    <div className='flex items-center gap-3'>
-      <select
-        value={subjectCode}
-        onChange={e => handleSubjectChange(e.target.value)}
-        className='bg-input border border-border rounded-lg px-3 py-1.5 text-primary text-sm
-          focus:border-teal/60 focus:outline-none'
-      >
-        {enrolled.length > 0
-          ? enrolled.map(e => (
-              <option key={e.subject_code} value={e.subject_code}>{e.subject_name}</option>
-            ))
-          : Object.entries(SUBJECT_TOPICS).map(([code, s]) => (
-              <option key={code} value={code}>{s.name}</option>
-            ))
+    const assistantMsg = { role: 'assistant', content: '', ts: Date.now(), streaming: true };
+    setMessages(prev => [...prev, assistantMsg]);
+    setStreaming(true);
+
+    let accumulated = '';
+    let hasReceivedChunk = false;
+
+    sendTutorMessage(
+      { message: text, subject_id: subjectId || undefined },
+      (chunk) => {
+        hasReceivedChunk = true;
+        accumulated += chunk;
+        setMessages(prev => {
+          const copy = [...prev];
+          const last = copy[copy.length - 1];
+          if (last.role === 'assistant') copy[copy.length - 1] = { ...last, content: accumulated };
+          return copy;
+        });
+      },
+      () => {
+        if (!hasReceivedChunk) {
+          setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last.role === 'assistant') {
+              copy[copy.length - 1] = { ...last, content: 'Sorry, I could not generate a response. Please try again.', streaming: false, error: true };
+            }
+            return copy;
+          });
+        } else {
+          setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last.role === 'assistant') copy[copy.length - 1] = { ...last, streaming: false };
+            return copy;
+          });
         }
-      </select>
+        setStreaming(false);
+        inputRef.current?.focus();
+        loadHistory();
+      },
+      (err) => {
+        setStreaming(false);
+        setMessages(prev => {
+          const copy = [...prev];
+          const last = copy[copy.length - 1];
+          if (last.role === 'assistant') {
+            copy[copy.length - 1] = { ...last, content: 'Sorry, I ran into an error. Please try again.', streaming: false, error: true };
+          }
+          return copy;
+        });
+      }
+    );
+  };
 
-      <select
-        value={topic}
-        onChange={e => setTopic(e.target.value)}
-        className='bg-input border border-border rounded-lg px-3 py-1.5 text-primary text-sm
-          focus:border-teal/60 focus:outline-none'
-      >
-        {currentTopics.map(t => (
-          <option key={t} value={t}>
-            {t.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-          </option>
-        ))}
-      </select>
+  const handleKey = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
 
-      <span className='badge-blue text-xs'>
-        {learningStyle === 'visual' ? '🎨 Visual' : learningStyle === 'auditory' ? '🎧 Auditory' : learningStyle === 'kinesthetic' ? '🧪 Kinesthetic' : '📖 Reading'}
-      </span>
+  const toggleSocraticMode = () => {
+    setSocraticMode(prev => !prev);
+  };
 
-      <span className='badge-teal stat-number'>FCL {fcl}</span>
-
-      {speaking && (
-        <button onClick={stop} className='text-red-400 text-xs hover:underline'>
-          ⏹ Stop
-        </button>
-      )}
-    </div>
-  );
+  const statusColor = {
+    checking: 'text-amber-400',
+    connected: 'text-green-400',
+    disconnected: 'text-red-400',
+  }[aiStatus];
+  const statusText = {
+    checking: 'Connecting...',
+    connected: 'Connected',
+    disconnected: 'Disconnected – check API key',
+  }[aiStatus];
 
   return (
-    <div className='flex h-screen bg-app overflow-hidden'>
-      <Sidebar unreadCount={unread} />
+    <div className="dashboard-shell">
+      <Sidebar open={sideOpen} onClose={() => setSideOpen(false)} />
 
-      <div className='flex flex-col flex-1 min-w-0 ml-60'>
-        <div className='sticky top-0 z-30 bg-app/80 backdrop-blur border-b border-border
-          px-6 py-3 flex items-center justify-between'>
-          <div>
-            <h1 className='text-primary font-semibold text-base'>AI Tutor</h1>
-            <p className='text-muted text-xs'>Powered by Gemini + Hugging Face</p>
-          </div>
-          <div className='flex items-center gap-4'>
-            {headerActions}
-            <NotificationsPanel />
-            <button
-              onClick={() => navigate('/profile')}
-              className='w-8 h-8 rounded-full bg-teal/20 border border-teal/40 flex items-center
-                justify-center text-teal text-xs font-bold hover:bg-teal/30 transition-colors overflow-hidden'
-            >
-              {window.__profilePic
-                ? <img src={window.__profilePic} alt='avatar' className='w-full h-full object-cover rounded-full' />
-                : (window.__studentName || 'U')[0].toUpperCase()
-              }
-            </button>
-          </div>
-        </div>
+      <div className="dashboard-main" style={{ paddingTop: 'var(--navbar-height)', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <Navbar onMenuToggle={() => setSideOpen(p => !p)} />
 
-        <div className='bg-card border-b border-border px-6 py-2 flex items-center gap-6 text-xs text-muted'>
-          <label className='flex items-center gap-2 cursor-pointer'>
-            <input
-              type='checkbox' checked={autoRead}
-              onChange={e => setAutoRead(e.target.checked)}
-              className='accent-teal'
-            />
-            Auto-read responses
-          </label>
-          <label className='flex items-center gap-2'>
-            Speed:
-            <select
-              value={rate} onChange={e => setRate(+e.target.value)}
-              className='bg-input border border-border rounded px-1 text-xs focus:outline-none'
-            >
-              {[0.75, 1.0, 1.25, 1.5].map(r => (
-                <option key={r} value={r}>{r}x</option>
-              ))}
-            </select>
-          </label>
-          <span className={`ml-auto flex items-center gap-1 ${sessionId ? 'text-green-400' : 'text-amber-400'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full inline-block ${sessionId ? 'bg-green-400' : 'bg-amber-400 animate-pulse'}`} />
-            {sessionId ? 'Session active' : 'Connecting…'}
-          </span>
-        </div>
-
-        <div className='flex-1 overflow-y-auto px-6 py-4'>
-          {messages.map((m, i) => (
-            <MsgBubble 
-              key={i} 
-              msg={m} 
-              onSpeak={speak} 
-              imageUrl={m.image_url} 
-              youtubeLink={m.youtube_link} 
-            />
-          ))}
-
-          {sending && (
-            <div className='flex gap-3 mb-4'>
-              <div className='w-8 h-8 rounded-lg bg-teal/15 border border-teal/30 flex items-center justify-center text-teal text-xs'>
-                AI
-              </div>
-              <div className='bg-card border border-border rounded-2xl px-4 py-3 flex gap-1 items-center'>
-                {[0, 1, 2].map(i => (
-                  <div key={i} className='w-2 h-2 rounded-full bg-teal animate-bounce'
-                    style={{ animationDelay: `${i * 150}ms` }} />
-                ))}
+        {/* No extra padding wrapper – direct chat */}
+        <div className={styles.chatWrapper} style={{ flex: 1, overflow: 'hidden' }}>
+          <div className={styles.chatHeader}>
+            <div className={styles.chatHeaderLeft}>
+              <div className={styles.botAvatar}>🤖</div>
+              <div>
+                <h2 className={styles.chatTitle}>AI Tutor</h2>
+                <p className={styles.chatSub}>Personalised for your {user?.dominant_vark ?? 'VARK'} learning style</p>
               </div>
             </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowHistory(!showHistory)}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-border text-muted hover:text-primary transition-all"
+                title="View chat history"
+              >
+                📜 History
+              </button>
+              <button
+                onClick={startNewSession}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-border text-muted hover:text-primary transition-all"
+                title="Start new chat"
+              >
+                ✨ New Chat
+              </button>
+              <button
+                onClick={toggleSocraticMode}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  socraticMode
+                    ? 'bg-teal text-app'
+                    : 'bg-border text-muted hover:text-primary'
+                }`}
+                title={socraticMode ? 'Socratic mode: I will ask guiding questions' : 'Tutoring mode: I will explain directly'}
+              >
+                {socraticMode ? '🧠 Socratic' : '💬 Tutoring'}
+              </button>
+              <div className={`flex items-center gap-1 text-xs ${statusColor}`}>
+                <span className="inline-block w-2 h-2 rounded-full currentColor animate-pulse" />
+                <span>{statusText}</span>
+              </div>
+              <select
+                className={`input ${styles.subjectSelect}`}
+                value={subjectId}
+                onChange={e => setSubjectId(e.target.value)}
+              >
+                <option value="">No subject filter</option>
+                {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {/* Chat history sidebar */}
+          {showHistory && (
+            <div className="absolute left-0 top-20 bottom-0 w-80 bg-sidebar border-r border-border z-20 overflow-y-auto p-4">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-primary font-semibold">Past Conversations</h3>
+                <button onClick={() => setShowHistory(false)} className="text-muted hover:text-primary">✕</button>
+              </div>
+              {historySessions.length === 0 ? (
+                <p className="text-muted text-sm">No past conversations yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {historySessions.map(session => (
+                    <button
+                      key={session.session_id}
+                      onClick={() => loadSessionMessages(session)}
+                      className="w-full text-left p-3 rounded-xl border border-border hover:border-teal/30 transition-colors"
+                    >
+                      <div className="flex justify-between text-xs text-muted mb-1">
+                        <span>{new Date(session.started_at).toLocaleString()}</span>
+                        <span>{session.messages?.length || 0} messages</span>
+                      </div>
+                      <p className="text-primary text-sm truncate">
+                        {session.messages?.[0]?.content?.substring(0, 60) || 'New conversation'}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
-          <div ref={bottomRef} />
-        </div>
 
-        <div className='bg-card border-t border-border px-6 py-4 flex gap-3'>
-          <input
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-            placeholder='Ask your tutor anything…'
-            className='flex-1 bg-input border border-border rounded-xl px-4 py-3 text-primary text-sm
-              focus:outline-none focus:border-teal/60 focus:ring-1 focus:ring-teal/30'
-          />
-          <button
-            onClick={listening ? stopListening : startListening}
-            className={`px-4 py-3 rounded-xl text-sm font-medium transition-colors ${
-              listening
-                ? 'bg-red-500/10 border border-red-500/40 text-red-400'
-                : 'bg-card border border-border text-muted hover:border-teal/40'
-            }`}
-          >
-            {listening ? '⏹' : '🎤'}
-          </button>
-          <button
-            onClick={sendMessage}
-            disabled={sending || !input.trim()}
-            className='btn-primary px-6 py-3 rounded-xl disabled:opacity-50'
-          >
-            {sending ? '…' : 'Send'}
-          </button>
-        </div>
+          <div className={styles.messages}>
+            {messages.length === 0 && (
+              <div className={styles.emptyState}>
+                <div className={styles.emptyIcon}>💬</div>
+                <h3>Ask me anything</h3>
+                <p>I'll explain concepts tailored to how you learn best.</p>
+                <div className={styles.suggestions}>
+                  {['Explain photosynthesis', 'Help me with quadratic equations', 'What is osmosis?'].map(s => (
+                    <button key={s} className={styles.suggestion} onClick={() => { setInput(s); inputRef.current?.focus(); }}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
+            {messages.map((msg, i) => (
+              <MessageBubble key={i} msg={msg} />
+            ))}
+            <div ref={bottomRef} />
+          </div>
+
+          <div className={styles.inputArea}>
+            <div className={styles.inputWrap}>
+              <textarea
+                ref={inputRef}
+                className={styles.textInput}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKey}
+                placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
+                rows={1}
+                disabled={streaming || aiStatus !== 'connected'}
+              />
+              <button
+                className={styles.sendBtn}
+                onClick={sendMessage}
+                disabled={!input.trim() || streaming || aiStatus !== 'connected'}
+                aria-label="Send message"
+              >
+                {streaming ? <SpinnerIcon /> : <SendIcon />}
+              </button>
+            </div>
+            <p className={styles.inputHint}>AI responses are for learning support. Always verify with your teacher.</p>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,62 +1,77 @@
-import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import Login            from './pages/Login';
-import Register         from './pages/Register';
-import StudentDashboard from './pages/StudentDashboard';
-import SubjectProfile   from './pages/SubjectProfile';
-import TutorChat        from './pages/TutorChat';
-import QuizPage         from './pages/QuizPage';
-import ProgressTracker  from './pages/ProgressTracker';
-import ContentLibrary   from './pages/ContentLibrary';
-import LessonPlayer     from './pages/LessonPlayer';
-import MessagesPage     from './pages/MessagesPage';
-import TeacherDashboard from './pages/TeacherDashboard';
-import StudentProfile   from './pages/StudentProfile';   
+import { AuthProvider } from './contexts/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+
+/* Public */
+import Landing       from './pages/Landing';
+import Auth          from './pages/Auth';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword  from './pages/ResetPassword';
-import TeacherUpload from './pages/TeacherUpload';
 
+/* Student */
+import StudentDashboard from './pages/StudentDashboard';
+import TutorChat        from './pages/TutorChat';
+import QuizPage         from './pages/QuizPage';
+import ProgressPage     from './pages/ProgressPage';
+import LibraryPage      from './pages/LibraryPage';
+import MessagesPage     from './pages/MessagesPage';
+import StudentProfile   from './pages/StudentProfile';
+import LessonPlayer     from './pages/LessonPlayer';
+import ReviewPage       from './pages/ReviewPage';
 
-// ... inside Routes
-<Route path="/teacher/upload" element={<Private teacherOnly><TeacherUpload /></Private>} />
+/* Teacher */
+import TeacherDashboard      from './pages/TeacherDashboard';
+import TeacherLibraryUpload  from './pages/TeacherLibraryUpload';
+import TeacherProfile        from './pages/TeacherProfile';
+import TeacherTopics from './pages/TeacherTopics';
 
-function Private({ children, teacherOnly = false }) {
-  if (!window.__authToken) {
-    const token = localStorage.getItem('sa_token');
-    if (token) {
-      window.__authToken   = token;
-      window.__studentId   = localStorage.getItem('sa_studentId');
-      window.__isTeacher   = localStorage.getItem('sa_isTeacher') === 'true';
-      window.__studentName = localStorage.getItem('sa_name');
-      window.__profilePic  = localStorage.getItem('sa_pic') || null;
-    }
-  }
-
-  if (!window.__authToken) return <Navigate to='/login' replace />;
-  if (teacherOnly && !window.__isTeacher) return <Navigate to='/dashboard' replace />;
-  return children;
+function getDashboardPath() {
+  const isTeacher = localStorage.getItem('sa_isTeacher') === 'true';
+  return isTeacher ? '/teacher' : '/student';
 }
 
 export default function App() {
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <Routes>
-        <Route path='/login'      element={<Login />} />
-        <Route path='/register'   element={<Register />} />
-        <Route path='/forgot-password' element={<ForgotPassword />} />
-        <Route path='/reset-password'  element={<ResetPassword />} />
-        <Route path='/dashboard'  element={<Private><StudentDashboard /></Private>} />
-        <Route path='/subjects'   element={<Private><SubjectProfile /></Private>} />
-        <Route path='/chat'       element={<Private><TutorChat /></Private>} />
-        <Route path='/quiz'       element={<Private><QuizPage /></Private>} />
-        <Route path='/progress'   element={<Private><ProgressTracker /></Private>} />
-        <Route path='/library'    element={<Private><ContentLibrary /></Private>} />
-        <Route path='/lesson/:id' element={<Private><LessonPlayer /></Private>} />
-        <Route path='/messages'   element={<Private><MessagesPage /></Private>} />
-        <Route path='/teacher'    element={<Private teacherOnly><TeacherDashboard /></Private>} />
-        <Route path='/profile'    element={<Private><StudentProfile /></Private>} />  {/* ← NEW */}
-        <Route path='*'           element={<Navigate to='/login' replace />} />
-      </Routes>
-    </BrowserRouter>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public */}
+          <Route path="/"             element={<Landing />} />
+          <Route path="/auth"         element={<Auth />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password"  element={<ResetPassword />} />
+
+          {/* Redirect /dashboard */}
+          <Route path="/dashboard" element={<Navigate to={getDashboardPath()} replace />} />
+
+          {/* Student routes */}
+          <Route element={<ProtectedRoute roles={['student']} />}>
+            <Route path="/student"           element={<StudentDashboard />} />
+            <Route path="/student/tutor"     element={<TutorChat />} />
+            <Route path="/student/quizzes"   element={<QuizPage />} />
+            <Route path="/student/progress"  element={<ProgressPage />} />
+            <Route path="/student/review"    element={<ReviewPage />} />   {/* NEW */}
+            <Route path="/student/library"   element={<LibraryPage />} />
+            <Route path="/student/messages"  element={<MessagesPage />} />
+            <Route path="/student/profile"   element={<StudentProfile />} />
+            <Route path="/student/lesson/:id" element={<LessonPlayer />} />
+          </Route>
+
+          {/* Teacher routes */}
+          <Route element={<ProtectedRoute roles={['teacher']} />}>
+            <Route path="/teacher"            element={<TeacherDashboard />} />
+            <Route path="/teacher/students"   element={<TeacherDashboard tab="students" />} />
+            <Route path="/teacher/directives" element={<TeacherDashboard tab="directives" />} />
+            <Route path="/teacher/library"    element={<TeacherLibraryUpload />} />
+            <Route path="/teacher/messages"   element={<MessagesPage />} />
+            <Route path="/teacher/profile"    element={<TeacherProfile />} />
+            <Route path="/teacher/topics" element={<TeacherTopics />} />
+          </Route>
+
+          {/* Catch-all */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }

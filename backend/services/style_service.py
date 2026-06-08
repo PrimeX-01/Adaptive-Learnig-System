@@ -5,9 +5,9 @@ from db.models import (StudentSubjectStyle, StyleInteraction,
 from datetime import datetime, timedelta
 
 
-
+# ══════════════════════════════════════════════════════════════════
 #  GET / SET STYLE
-
+# ══════════════════════════════════════════════════════════════════
 
 def get_student_style(student_id: int, db: Session) -> str:
     """Get student's overall preferred learning style."""
@@ -107,9 +107,9 @@ def set_overall_style(student_id: int, style: str, db: Session):
     db.commit()
 
 
-
+# ══════════════════════════════════════════════════════════════════
 #  LOG INTERACTIONS
-
+# ══════════════════════════════════════════════════════════════════
 
 def log_interaction(student_id: int, subject_id: int,
                      modality: str, source: str, db: Session):
@@ -140,9 +140,9 @@ def infer_modality_from_style(learning_style: str) -> str:
     }.get(learning_style, 'reading')
 
 
-
+# ══════════════════════════════════════════════════════════════════
 #  ADAPTIVE DETECTION
-
+# ══════════════════════════════════════════════════════════════════
 
 def detect_and_update_style(student_id: int, subject_id: int,
                               db: Session, min_interactions: int = 20) -> dict:
