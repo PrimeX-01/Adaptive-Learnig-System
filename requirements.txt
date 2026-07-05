@@ -11,7 +11,7 @@ attrs==26.1.0
 bcrypt==4.0.1
 blinker==1.9.0
 cachetools==7.0.5
-catboost @ file:///C:/Users/Prime/Downloads/wheelhouse/catboost-1.2.10-cp311-cp311-win_amd64.whl#sha256=41bbe16cab0695978c325a20fa300f92831ed78e9cc8c5fe8047538b4055e98e
+catboost==1.2.10
 certifi==2026.2.25
 cffi==2.0.0
 charset-normalizer==3.4.7
