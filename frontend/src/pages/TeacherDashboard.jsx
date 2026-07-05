@@ -4,11 +4,11 @@ import { useAuth } from '../contexts/AuthContext';
 import Sidebar from '../components/Sidebar';
 import Navbar  from '../components/Navbar';
 import {
-  getTeacherDashboard, getMyStudents,
-  getStrugglingStudents, getDirectives, upsertDirective, deleteDirective,
+  getTeacherDashboard, getStrugglingStudents,
+  getDirectives, upsertDirective, deleteDirective,
   getMySubjects,
 } from '../services/teacher';
-import api from '../services/api';
+import { api } from '../services/client';          // fixed import
 import styles from './TeacherDashboard.module.css';
 
 const TABS = ['overview', 'students', 'directives', 'heatmap', 'engagement'];
@@ -35,19 +35,67 @@ export default function TeacherDashboard({ tab: initialTab = 'overview' }) {
   const [engagementData, setEngagementData] = useState(null);
   const [engagementLoading, setEngagementLoading] = useState(false);
 
+  // Load main data
   useEffect(() => {
     Promise.all([
       getTeacherDashboard(),
-      getMyStudents(),
       getStrugglingStudents(),
       getDirectives(),
       getMySubjects(),
-    ]).then(([dash, studs, struggling, dirs, subs]) => {
+    ]).then(([dash, strugglingRes, dirs, subs]) => {
       setDashboard(dash);
-      setStudents(studs ?? []);
-      setStruggling(struggling ?? []);
+      setStruggling(strugglingRes ?? []);
       setDirectives(dirs ?? []);
-      setSubjects(subs ?? []);
+
+      // Build enriched student list from dashboard.students
+      const studentMap = new Map();
+      if (dash?.students) {
+        dash.students.forEach(row => {
+          const sid = row.student_id;
+          if (!studentMap.has(sid)) {
+            studentMap.set(sid, {
+              id: sid,
+              name: row.name,
+              email: row.email,
+              grade_label: row.grade_label,
+              class_name: row.class_name,
+              subject_ids: [],
+              fcl_values: [],
+              total_quizzes: 0,
+              is_struggling: false,
+              dominant_vark: '—',
+            });
+          }
+          const stu = studentMap.get(sid);
+          stu.subject_ids.push(row.subject_id);
+          stu.fcl_values.push(row.fcl_level);
+          stu.total_quizzes += (row.total_attempts || 0);
+          if (row.is_at_risk) stu.is_struggling = true;
+        });
+      }
+      const studentList = Array.from(studentMap.values()).map(s => ({
+        ...s,
+        fcl_level: s.fcl_values.length
+          ? (s.fcl_values.reduce((a, b) => a + b, 0) / s.fcl_values.length).toFixed(1)
+          : 1,
+      }));
+      setStudents(studentList);
+
+      // Enrich subjects with student counts
+      const subjectCounts = {};
+      if (dash?.students) {
+        dash.students.forEach(row => {
+          const subjId = row.subject_id;
+          subjectCounts[subjId] = (subjectCounts[subjId] || 0) + 1;
+        });
+      }
+      const enrichedSubjects = (subs || []).map(sub => ({
+        ...sub,
+        student_count: subjectCounts[sub.id] || 0,
+        grade_level: 'N/A',
+      }));
+      setSubjects(enrichedSubjects);
+
     }).catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -67,11 +115,12 @@ export default function TeacherDashboard({ tab: initialTab = 'overview' }) {
   }, [activeTab, teacherId]);
 
   const loadHeatmap = async () => {
+    if (!teacherId) return;
     setHeatmapLoading(true);
     try {
       const params = selectedSubjectId ? `?subject_id=${selectedSubjectId}` : '';
       const res = await api.get(`/api/teachers/heatmap/${teacherId}${params}`);
-      setHeatmapData(res.data);
+      setHeatmapData(res);
     } catch (err) {
       console.error('Failed to load heatmap', err);
     } finally {
@@ -80,10 +129,11 @@ export default function TeacherDashboard({ tab: initialTab = 'overview' }) {
   };
 
   const loadEngagement = async () => {
+    if (!teacherId) return;
     setEngagementLoading(true);
     try {
       const res = await api.get(`/api/teachers/engagement/${teacherId}`);
-      setEngagementData(res.data);
+      setEngagementData(res);
     } catch (err) {
       console.error('Failed to load engagement', err);
     } finally {
@@ -107,16 +157,13 @@ export default function TeacherDashboard({ tab: initialTab = 'overview' }) {
   return (
     <div className="dashboard-shell">
       <Sidebar open={sideOpen} onClose={() => setSideOpen(false)} />
-
       <div className="dashboard-main" style={{ paddingTop: 'var(--navbar-height)' }}>
         <Navbar onMenuToggle={() => setSideOpen(p => !p)} />
 
         <div className="dashboard-content">
           <div className={styles.header}>
             <div>
-              <h1 className={styles.title}>
-                Welcome, <span>{user?.first_name}</span>
-              </h1>
+              <h1 className={styles.title}>Welcome, <span>{user?.first_name}</span></h1>
               <p className={styles.subtitle}>Manage your class and AI instructions</p>
             </div>
           </div>
@@ -224,7 +271,7 @@ export default function TeacherDashboard({ tab: initialTab = 'overview' }) {
                           {engagementData.students.map(student => (
                             <tr key={student.student_id} className="border-b border-border/50">
                               <td className="p-3 text-primary">{student.name}</td>
-                              <td className="p-3 text-muted">{student.grade || '—'}</td>
+                              <td className="p-3 text-muted">{student.grade_label || '—'}</td>
                               <td className="p-3 text-muted">{student.email}</td>
                               <td className="p-3 text-red-400 font-medium">{student.days_inactive} days</td>
                               <td className="p-3 text-muted">
@@ -288,7 +335,7 @@ function OverviewTab({ dashboard, struggling, subjects }) {
           {subjects.map(sub => (
             <div key={sub.id} className={styles.subjectCard}>
               <p className={styles.subjectName}>{sub.name}</p>
-              <p className={styles.subjectMeta}>Grade {sub.grade_level} · {sub.student_count ?? 0} students</p>
+              <p className={styles.subjectMeta}>{sub.student_count ?? 0} students</p>
             </div>
           ))}
         </div>
@@ -334,16 +381,18 @@ function StudentsTab({ students, subjects, filterSubject, setFilterSubject }) {
               <tr key={st.id}>
                 <td>
                   <div className={styles.studentCell}>
-                    <div className={styles.smallAvatar}>{st.first_name?.[0]}{st.last_name?.[0]}</div>
+                    <div className={styles.smallAvatar}>
+                      {st.name?.split(' ').map(w => w[0]).join('')}
+                    </div>
                     <div>
-                      <p className={styles.studentName}>{st.first_name} {st.last_name}</p>
+                      <p className={styles.studentName}>{st.name}</p>
                       <p className={styles.studentEmail}>{st.email}</p>
                     </div>
                   </div>
                 </td>
                 <td><span className={`fcl-badge fcl-${st.fcl_level ?? 1}`}>L{st.fcl_level ?? 1}</span></td>
-                <td><span className={styles.varkPill}>{st.dominant_vark ?? '—'}</span></td>
-                <td className={styles.quizCount}>{st.quizzes_completed ?? 0}</td>
+                <td><span className={styles.varkPill}>{st.dominant_vark}</span></td>
+                <td className={styles.quizCount}>{st.total_quizzes}</td>
                 <td>
                   <span className={`badge ${st.is_struggling ? 'badge-warn' : 'badge-success'}`}>
                     {st.is_struggling ? 'Needs help' : 'On track'}
@@ -362,7 +411,7 @@ function StudentsTab({ students, subjects, filterSubject, setFilterSubject }) {
 }
 
 // ------------------------------------------------------------
-// Directives Tab
+// Directives Tab (fixed)
 // ------------------------------------------------------------
 function DirectivesTab({ directives, setDirectives, students, subjects }) {
   const [form, setForm]       = useState({ student_id: '', subject_id: '', instruction: '' });
@@ -373,16 +422,33 @@ function DirectivesTab({ directives, setDirectives, students, subjects }) {
     if (!form.instruction.trim()) return;
     setSaving(true);
     try {
-      const saved = await upsertDirective(form);
+      // Backend expects 'directive', not 'instruction'
+      const payload = {
+        student_id: form.student_id || null,
+        subject_id: form.subject_id || null,
+        directive:  form.instruction.trim(),
+        label:      form.label || null,
+      };
+      const saved = await upsertDirective(payload);
       setDirectives(prev => {
-        const idx = prev.findIndex(d => d.student_id === saved.student_id && d.subject_id === saved.subject_id);
-        if (idx >= 0) { const copy = [...prev]; copy[idx] = saved; return copy; }
+        const idx = prev.findIndex(
+          d => d.student_id === saved.student_id && d.subject_id === saved.subject_id
+        );
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = saved;
+          return copy;
+        }
         return [...prev, saved];
       });
       setMsg('Directive saved!');
       setTimeout(() => setMsg(''), 2500);
-    } catch { setMsg('Save failed'); }
-    finally { setSaving(false); }
+      setForm({ student_id: '', subject_id: '', instruction: '' });
+    } catch {
+      setMsg('Save failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (id) => {
@@ -399,13 +465,25 @@ function DirectivesTab({ directives, setDirectives, students, subjects }) {
           Leave student/subject blank to apply globally.
         </p>
         <div className={styles.directiveForm}>
-          <select className="input" value={form.student_id} onChange={e => setForm(p => ({ ...p, student_id: e.target.value }))}>
+          <select
+            className="input"
+            value={form.student_id}
+            onChange={e => setForm(p => ({ ...p, student_id: e.target.value }))}
+          >
             <option value="">All students</option>
-            {students.map(s => <option key={s.id} value={s.id}>{s.first_name} {s.last_name}</option>)}
+            {students.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
           </select>
-          <select className="input" value={form.subject_id} onChange={e => setForm(p => ({ ...p, subject_id: e.target.value }))}>
+          <select
+            className="input"
+            value={form.subject_id}
+            onChange={e => setForm(p => ({ ...p, subject_id: e.target.value }))}
+          >
             <option value="">All subjects</option>
-            {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {subjects.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
           </select>
           <textarea
             className={`input ${styles.directiveTextarea}`}
@@ -432,10 +510,10 @@ function DirectivesTab({ directives, setDirectives, students, subjects }) {
             return (
               <div key={d.id} className={styles.directiveItem}>
                 <div className={styles.directiveMeta}>
-                  <span className="badge badge-accent">{st ? `${st.first_name} ${st.last_name}` : 'All students'}</span>
+                  <span className="badge badge-accent">{st ? st.name : 'All students'}</span>
                   <span className="badge badge-accent">{sub ? sub.name : 'All subjects'}</span>
                 </div>
-                <p className={styles.directiveText}>{d.instruction}</p>
+                <p className={styles.directiveText}>{d.instruction || d.directive}</p>
                 <button className={styles.deleteBtn} onClick={() => handleDelete(d.id)}>✕ Remove</button>
               </div>
             );

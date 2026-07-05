@@ -113,7 +113,7 @@ function MessageContent({ content }) {
   );
 }
 
-function MessageBubble({ msg }) {
+function MessageBubble({ msg, onAudioPlay }) {
   const isUser = msg.role === 'user';
   return (
     <div className={`${styles.bubble} ${isUser ? styles.userBubble : styles.aiBubble}`}>
@@ -129,7 +129,10 @@ function MessageBubble({ msg }) {
         {msg.streaming && <span className={styles.cursor} />}
         {!isUser && !msg.streaming && msg.content && (
           <div className="mt-3 pt-2 border-t border-border/40">
-            <AudioPlayer text={msg.content} label="🔊 Read aloud" />
+            {/* AudioPlayer wrapped to fire VARK auditory signal on play */}
+            <div onClick={onAudioPlay}>
+              <AudioPlayer text={msg.content} label="🔊 Read aloud" />
+            </div>
           </div>
         )}
       </div>
@@ -183,6 +186,22 @@ export default function TutorChat() {
       setHistorySessions(res.data || []);
     } catch (err) {
       console.error('Failed to load chat history:', err);
+    }
+  };
+
+  // ── VARK: log audio button click as strong auditory signal ─────
+  // Called whenever the student presses the listen/play button on any
+  // tutor message. Fires silently — never blocks the UI.
+  const logAudioPlay = async () => {
+    try {
+      const studentId = user?.id || localStorage.getItem('sa_studentId');
+      if (!studentId) return;
+      await api.post('/api/style/log-audio-button', {
+        student_id: parseInt(studentId),
+        subject_id: subjectId ? parseInt(subjectId) : 1,
+      });
+    } catch {
+      // Non-critical — swallow silently
     }
   };
 
@@ -417,7 +436,7 @@ export default function TutorChat() {
             )}
 
             {messages.map((msg, i) => (
-              <MessageBubble key={i} msg={msg} />
+              <MessageBubble key={i} msg={msg} onAudioPlay={logAudioPlay} />
             ))}
             <div ref={bottomRef} />
           </div>

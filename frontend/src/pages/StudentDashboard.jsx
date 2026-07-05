@@ -310,14 +310,24 @@ export default function StudentDashboard() {
       };
       setWeeklyData(weekly);
 
-      const styleMap = {
-        visual:      { v: 60, a: 15, r: 15, k: 10 },
-        auditory:    { v: 10, a: 60, r: 20, k: 10 },
-        reading:     { v: 15, a: 10, r: 60, k: 15 },
-        kinesthetic: { v: 10, a: 15, r: 15, k: 60 },
-      };
-      const dominant = profile.preferred_learning_style || 'reading';
-      const vark_profile = styleMap[dominant] || styleMap.reading;
+      // ── Real VARK scores from API (replaces hardcoded style_map) ──
+      let vark_profile = { v: 25, a: 25, r: 25, k: 25 };
+      let varkInteractions = 0;
+      try {
+        const varkRes = await api.get(`/api/style/${studentId}/vark-scores`, { timeout: 8000 });
+        if (varkRes.data) {
+          vark_profile = {
+            v: varkRes.data.v_score || 25,
+            a: varkRes.data.a_score || 25,
+            r: varkRes.data.r_score || 25,
+            k: varkRes.data.k_score || 25,
+          };
+          varkInteractions = varkRes.data.total_interactions || 0;
+        }
+      } catch {
+        // Fall back to a flat profile — better than fake numbers
+        vark_profile = { v: 25, a: 25, r: 25, k: 25 };
+      }
 
       const lowestAcc = subjects.reduce((min, sub) => (sub.accuracy !== null && sub.accuracy < (min?.accuracy ?? 100) ? sub : min), null);
       if (lowestAcc && lowestAcc.accuracy < 70) {
@@ -341,6 +351,7 @@ export default function StudentDashboard() {
         },
         subjects,
         vark_profile,
+        varkInteractions,
         learningStyle,
       });
     } catch (err) {
@@ -465,7 +476,7 @@ export default function StudentDashboard() {
                 </div>
                 <div className={styles.varkGrid}>
                   {Object.entries(VARK_LABEL).map(([k, label]) => {
-                    const pct = vark_profile[k.toLowerCase()] ?? 0;
+                    const pct = Math.round(vark_profile[k.toLowerCase()] ?? 0);
                     return (
                       <div key={k} className={styles.varkItem}>
                         <div className={styles.varkBar}>
@@ -477,7 +488,17 @@ export default function StudentDashboard() {
                     );
                   })}
                 </div>
-                <p className="text-muted text-xs text-center mt-2">Based on your chosen learning style. Complete more activities to refine the profile.</p>
+                {/* Show evidence count so students know how accurate the profile is */}
+                {data.varkInteractions !== undefined && (
+                  <p className="text-muted text-xs text-center mt-2">
+                    {data.varkInteractions < 10
+                      ? `Based on ${data.varkInteractions} interaction${data.varkInteractions !== 1 ? 's' : ''} — keep using the tutor to improve accuracy.`
+                      : data.varkInteractions < 30
+                      ? `Based on ${data.varkInteractions} interactions — profile is building. Keep going!`
+                      : `Based on ${data.varkInteractions} interactions — this profile reflects your real learning behaviour.`
+                    }
+                  </p>
+                )}
               </section>
             </div>
           </div>

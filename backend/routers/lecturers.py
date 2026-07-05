@@ -3,19 +3,19 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timedelta, timezone   # ← added timezone
+from datetime import datetime, timedelta
 
 from db.database import get_db
 from db.models import (
-    Teacher, Student, Subject, Class, Grade,
-    ClassSubject, TeacherClassSubject, StudentClassEnrollment,
-    Assessment, TopicFcl, ConversationSession,
-    Notification, TeacherAiDirective, TeacherPointAward,
-    LibraryContent,
+    Lecturer, Student, Course, Programme, Faculty,
+    ProgrammeCourseLevel, LecturerCourseAssignment,
+    StudentCourseEnrollment, Assessment, TopicFcl,
+    ConversationSession, Notification, TeacherAiDirective,
+    TeacherPointAward,
 )
-from auth import get_current_teacher, hash_password
+from auth import get_current_lecturer
 
-router = APIRouter(prefix='/api/teachers', tags=['Teachers'])
+router = APIRouter(prefix='/api/lecturers', tags=['Lecturers'])
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -31,18 +31,18 @@ class ProfileUpdate(BaseModel):
 
 class DirectiveCreate(BaseModel):
     student_id: Optional[int] = None
-    subject_id: Optional[int] = None
+    course_id:  Optional[int] = None
     directive:  str
     label:      Optional[str] = None
 
 class DirectiveUpdate(BaseModel):
-    directive:  Optional[str]  = None
-    label:      Optional[str]  = None
-    is_active:  Optional[bool] = None
+    directive: Optional[str]  = None
+    label:     Optional[str]  = None
+    is_active: Optional[bool] = None
 
 class AwardPointsRequest(BaseModel):
     student_id: int
-    subject_id: int
+    course_id:  int
     topic_id:   str
     points:     int
     reason:     str
@@ -57,43 +57,38 @@ class BulkTipRequest(BaseModel):
 #  HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
-def _get_teacher_subject_ids(teacher: Teacher, db: Session) -> List[int]:
-    """Return all subject_ids the teacher is assigned to."""
-    return [
-        tcs.class_subject.subject_id
-        for tcs in teacher.class_subjects
-        if tcs.class_subject
-    ]
-
-def _get_teacher_class_ids(teacher: Teacher, db: Session) -> List[int]:
+def _get_lecturer_course_ids(lecturer: Lecturer) -> List[int]:
     return list({
-        tcs.class_subject.class_id
-        for tcs in teacher.class_subjects
-        if tcs.class_subject
+        lca.pcl.course_id
+        for lca in lecturer.course_assignments
+        if lca.pcl
     })
 
-def _get_students_for_teacher(teacher_id: int, db: Session):
-    """All students whose class contains at least one subject taught by this teacher."""
+def _get_lecturer_pcl_ids(lecturer: Lecturer) -> List[int]:
+    return [lca.pcl_id for lca in lecturer.course_assignments]
+
+def _get_students_for_lecturer(lecturer_id: int, db: Session):
+    """All students enrolled in any pcl this lecturer is assigned to."""
     rows = db.execute(text('''
         SELECT DISTINCT s.id, s.name, s.email, s.profile_picture,
-                        g.label AS grade_label, cl.name AS class_name,
-                        cl.id AS class_id, g.id AS grade_id, g.order_index
-        FROM teacher_class_subjects tcs
-        JOIN class_subjects cs ON cs.id = tcs.class_subject_id
-        JOIN classes cl ON cl.id = cs.class_id
-        JOIN grades  g  ON g.id  = cl.grade_id
-        JOIN student_class_enrollments sce ON sce.class_id = cl.id
+                        p.name AS programme_name, pcl.level, pcl.semester,
+                        pcl.id AS pcl_id, c.name AS course_name, c.id AS course_id
+        FROM lecturer_course_assignments lca
+        JOIN programme_course_levels pcl ON pcl.id = lca.pcl_id
+        JOIN programmes p ON p.id = pcl.programme_id
+        JOIN courses    c ON c.id = pcl.course_id
+        JOIN student_course_enrollments sce ON sce.pcl_id = pcl.id
         JOIN students s ON s.id = sce.student_id
-        WHERE tcs.teacher_id = :tid
-        ORDER BY g.order_index, cl.name, s.name
-    '''), {'tid': teacher_id}).fetchall()
+        WHERE lca.lecturer_id = :lid
+        ORDER BY p.name, pcl.level, s.name
+    '''), {'lid': lecturer_id}).fetchall()
     return rows
 
-def _subject_fcl(student_id: int, subject_id: int, db: Session) -> float:
+def _course_fcl(student_id: int, course_id: int, db: Session) -> float:
     rows = db.execute(text(
-        'SELECT COALESCE(total_points, 0) FROM topic_fcl '
-        'WHERE student_id=:sid AND subject_id=:subid AND is_active=true'
-    ), {'sid': student_id, 'subid': subject_id}).fetchall()
+        'SELECT total_points FROM topic_fcl '
+        'WHERE student_id=:sid AND course_id=:cid AND is_active=true'
+    ), {'sid': student_id, 'cid': course_id}).fetchall()
     if not rows:
         return 1.0
     fcls = [max(1, r[0] // 1000) for r in rows]
@@ -104,101 +99,107 @@ def _subject_fcl(student_id: int, subject_id: int, db: Session) -> float:
 #  PROFILE
 # ═══════════════════════════════════════════════════════════════════
 
-@router.get('/profile/{teacher_id}')
-def get_profile(teacher_id: int, db: Session = Depends(get_db),
-                current: Teacher = Depends(get_current_teacher)):
-    t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
-    if not t:
-        raise HTTPException(404, 'Teacher not found')
+@router.get('/profile/{lecturer_id}')
+def get_profile(lecturer_id: int, db: Session = Depends(get_db),
+                current: Lecturer = Depends(get_current_lecturer)):
+    l = db.query(Lecturer).filter(Lecturer.id == lecturer_id).first()
+    if not l:
+        raise HTTPException(404, 'Lecturer not found')
     return {
-        'id':              t.id,
-        'name':            t.name,
-        'email':           t.email,
-        'username':        t.username,
-        'bio':             t.bio,
-        'profile_picture': t.profile_picture,
-        'status':          t.status,
-        'registered_at':   t.registered_at.isoformat() if t.registered_at else None,
+        'id':              l.id,
+        'name':            l.name,
+        'email':           l.email,
+        'username':        l.username,
+        'bio':             l.bio,
+        'profile_picture': l.profile_picture,
+        'faculty_id':      l.faculty_id,
+        'faculty_name':    l.faculty.name if l.faculty else '—',
+        'status':          l.status,
+        'registered_at':   l.registered_at.isoformat() if l.registered_at else None,
     }
 
-@router.patch('/profile/{teacher_id}')
-def update_profile(teacher_id: int, req: ProfileUpdate,
+@router.patch('/profile/{lecturer_id}')
+def update_profile(lecturer_id: int, req: ProfileUpdate,
                    db: Session = Depends(get_db),
-                   current: Teacher = Depends(get_current_teacher)):
-    t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
-    if not t:
-        raise HTTPException(404, 'Teacher not found')
-    if req.name            is not None: t.name            = req.name.strip()
-    if req.username        is not None: t.username        = req.username.strip() or None
-    if req.bio             is not None: t.bio             = req.bio.strip() or None
-    if req.email           is not None: t.email           = req.email.strip()
-    if req.profile_picture is not None: t.profile_picture = req.profile_picture
+                   current: Lecturer = Depends(get_current_lecturer)):
+    l = db.query(Lecturer).filter(Lecturer.id == lecturer_id).first()
+    if not l:
+        raise HTTPException(404, 'Lecturer not found')
+    if req.name            is not None: l.name            = req.name.strip()
+    if req.username        is not None: l.username        = req.username.strip() or None
+    if req.bio             is not None: l.bio             = req.bio.strip() or None
+    if req.email           is not None: l.email           = req.email.strip()
+    if req.profile_picture is not None: l.profile_picture = req.profile_picture
     db.commit()
-    return {'message': 'Profile updated', 'name': t.name}
+    return {'message': 'Profile updated', 'name': l.name}
 
 
 # ═══════════════════════════════════════════════════════════════════
 #  DASHBOARD
 # ═══════════════════════════════════════════════════════════════════
 
-@router.get('/dashboard/{teacher_id}')
-def teacher_dashboard(teacher_id: int,
-                      subject_id: Optional[int] = None,
-                      db: Session = Depends(get_db),
-                      current: Teacher = Depends(get_current_teacher)):
-    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
-    if not teacher:
-        raise HTTPException(404, 'Teacher not found')
+@router.get('/dashboard/{lecturer_id}')
+def lecturer_dashboard(lecturer_id: int,
+                       course_id: Optional[int] = None,
+                       db: Session = Depends(get_db),
+                       current: Lecturer = Depends(get_current_lecturer)):
+    lecturer = db.query(Lecturer).filter(Lecturer.id == lecturer_id).first()
+    if not lecturer:
+        raise HTTPException(404, 'Lecturer not found')
 
-    student_rows = _get_students_for_teacher(teacher_id, db)
-    subject_ids  = _get_teacher_subject_ids(teacher, db)
-
-    if subject_id and subject_id in subject_ids:
-        filter_subject_ids = [subject_id]
-    else:
-        filter_subject_ids = subject_ids
+    student_rows = _get_students_for_lecturer(lecturer_id, db)
+    course_ids   = _get_lecturer_course_ids(lecturer)
+    filter_course_ids = [course_id] if (course_id and course_id in course_ids) else course_ids
 
     students_out = []
     at_risk      = []
     fcl_sum      = 0
     fcl_count    = 0
+    seen_pairs   = set()
 
     for r in student_rows:
-        sid = r[0]
-        for subj_id in filter_subject_ids:
-            sfcl = _subject_fcl(sid, subj_id, db)
-            fcl_sum   += sfcl
-            fcl_count += 1
-            total_q = db.query(Assessment).filter(
-                Assessment.student_id == sid,
-                Assessment.subject_id == subj_id,
-            ).count()
-            correct_q = db.query(Assessment).filter(
-                Assessment.student_id == sid,
-                Assessment.subject_id == subj_id,
-                Assessment.is_correct == True,
-            ).count()
-            accuracy = round(correct_q / total_q * 100) if total_q > 0 else 0
-            is_at_risk = accuracy < 50 and total_q >= 5
-            subj = db.query(Subject).filter(Subject.id == subj_id).first()
-            row = {
-                'student_id':    sid,
-                'name':          r[1],
-                'email':         r[2],
-                'grade_label':   r[4],
-                'class_name':    r[5],
-                'subject_id':    subj_id,
-                'subject_name':  subj.name if subj else '—',
-                'subject_code':  subj.code if subj else '—',
-                'fcl_level':     sfcl,
-                'accuracy':      accuracy,
-                'total_attempts':total_q,
-                'is_at_risk':    is_at_risk,
-                'risk_reason':   'Low accuracy' if is_at_risk else '',
-            }
-            students_out.append(row)
-            if is_at_risk:
-                at_risk.append(row)
+        sid, c_id = r[0], r[9]
+        if c_id not in filter_course_ids:
+            continue
+        pair = (sid, c_id)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+
+        cfcl = _course_fcl(sid, c_id, db)
+        fcl_sum   += cfcl
+        fcl_count += 1
+
+        total_q = db.query(Assessment).filter(
+            Assessment.student_id == sid,
+            Assessment.course_id  == c_id,
+        ).count()
+        correct_q = db.query(Assessment).filter(
+            Assessment.student_id == sid,
+            Assessment.course_id  == c_id,
+            Assessment.is_correct == True,
+        ).count()
+        accuracy = round(correct_q / total_q * 100) if total_q > 0 else 0
+        is_at_risk = accuracy < 50 and total_q >= 5
+
+        row = {
+            'student_id':     sid,
+            'name':           r[1],
+            'email':          r[2],
+            'programme_name': r[4],
+            'level':          r[5],
+            'semester':       r[6],
+            'course_id':      c_id,
+            'course_name':    r[8],
+            'fcl_level':      cfcl,
+            'accuracy':       accuracy,
+            'total_attempts': total_q,
+            'is_at_risk':     is_at_risk,
+            'risk_reason':    'Low accuracy' if is_at_risk else '',
+        }
+        students_out.append(row)
+        if is_at_risk:
+            at_risk.append(row)
 
     fcl_buckets = {'FCL 1–5': 0, 'FCL 6–10': 0, 'FCL 11–15': 0, 'FCL 16–20': 0}
     for s in students_out:
@@ -209,16 +210,17 @@ def teacher_dashboard(teacher_id: int,
         else:        fcl_buckets['FCL 16–20'] += 1
     fcl_distribution = [{'fcl_label': k, 'count': v} for k, v in fcl_buckets.items()]
 
-    teacher_subjects = []
-    seen = set()
-    for tcs in teacher.class_subjects:
-        cs = tcs.class_subject
-        if cs.subject_id not in seen:
-            seen.add(cs.subject_id)
-            teacher_subjects.append({
-                'id':   cs.subject.id,
-                'name': cs.subject.name,
-                'code': cs.subject.code,
+    lecturer_courses = []
+    seen_c = set()
+    for lca in lecturer.course_assignments:
+        pcl = lca.pcl
+        if pcl.course_id not in seen_c:
+            seen_c.add(pcl.course_id)
+            lecturer_courses.append({
+                'id':   pcl.course.id,
+                'name': pcl.course.name,
+                'code': pcl.course.code,
+                'level':pcl.level,
             })
 
     total_students = len({s['student_id'] for s in students_out})
@@ -227,66 +229,77 @@ def teacher_dashboard(teacher_id: int,
     return {
         'stats': {
             'total_students': total_students,
-            'subjects_count': len(teacher_subjects),
+            'courses_count':  len(lecturer_courses),
             'avg_fcl':        avg_fcl,
         },
-        'teacher_subjects':    teacher_subjects,
-        'students':            students_out,
-        'at_risk':             at_risk,
-        'fcl_distribution':    fcl_distribution,
+        'lecturer_courses': lecturer_courses,
+        'students':         students_out,
+        'at_risk':          at_risk,
+        'fcl_distribution': fcl_distribution,
     }
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  SIMPLIFIED CURRENT-TEACHER ENDPOINTS (no teacher_id in path)
+#  SIMPLIFIED CURRENT-LECTURER ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════
 
 @router.get('/dashboard')
 def my_dashboard(db: Session = Depends(get_db),
-                 current: Teacher = Depends(get_current_teacher)):
-    return teacher_dashboard(current.id, db=db, current=current)
+                 current: Lecturer = Depends(get_current_lecturer)):
+    return lecturer_dashboard(current.id, db=db, current=current)
 
 @router.get('/students')
 def my_students(db: Session = Depends(get_db),
-                current: Teacher = Depends(get_current_teacher)):
-    rows = _get_students_for_teacher(current.id, db)
-    return [
-        {'id': r[0], 'name': r[1], 'email': r[2],
-         'grade_label': r[4], 'class_name': r[5]}
-        for r in rows
-    ]
+                current: Lecturer = Depends(get_current_lecturer)):
+    rows = _get_students_for_lecturer(current.id, db)
+    seen = set()
+    result = []
+    for r in rows:
+        if r[0] in seen:
+            continue
+        seen.add(r[0])
+        result.append({
+            'id': r[0], 'name': r[1], 'email': r[2],
+            'programme_name': r[4], 'level': r[5],
+        })
+    return result
 
 @router.get('/students/struggling')
 def struggling_students(db: Session = Depends(get_db),
-                        current: Teacher = Depends(get_current_teacher)):
-    rows        = _get_students_for_teacher(current.id, db)
-    subject_ids = _get_teacher_subject_ids(current, db)
+                        current: Lecturer = Depends(get_current_lecturer)):
+    lecturer    = current
+    course_ids  = _get_lecturer_course_ids(lecturer)
+    rows        = _get_students_for_lecturer(lecturer.id, db)
     struggling  = []
+    seen_pairs  = set()
+
     for r in rows:
-        sid = r[0]
-        for subj_id in subject_ids:
-            total   = db.query(Assessment).filter(
-                Assessment.student_id == sid,
-                Assessment.subject_id == subj_id,
-            ).count()
-            correct = db.query(Assessment).filter(
-                Assessment.student_id == sid,
-                Assessment.subject_id == subj_id,
-                Assessment.is_correct == True,
-            ).count()
-            accuracy = round(correct / total * 100) if total > 0 else 0
-            if total >= 5 and accuracy < 50:
-                sfcl = _subject_fcl(sid, subj_id, db)
-                name_parts = r[1].split(' ', 1)
-                struggling.append({
-                    'id':          sid,
-                    'first_name':  name_parts[0],
-                    'last_name':   name_parts[1] if len(name_parts) > 1 else '',
-                    'fcl_level':   round(sfcl),
-                    'alert_reason':f'Accuracy {accuracy}% in subject {subj_id}',
-                    'is_struggling':True,
-                })
-                break
+        sid, c_id = r[0], r[9]
+        if (sid, c_id) in seen_pairs:
+            continue
+        seen_pairs.add((sid, c_id))
+
+        total = db.query(Assessment).filter(
+            Assessment.student_id == sid,
+            Assessment.course_id  == c_id,
+        ).count()
+        correct = db.query(Assessment).filter(
+            Assessment.student_id == sid,
+            Assessment.course_id  == c_id,
+            Assessment.is_correct == True,
+        ).count()
+        accuracy = round(correct / total * 100) if total > 0 else 0
+        if total >= 5 and accuracy < 50:
+            cfcl = _course_fcl(sid, c_id, db)
+            name_parts = r[1].split(' ', 1)
+            struggling.append({
+                'id':         sid,
+                'first_name': name_parts[0],
+                'last_name':  name_parts[1] if len(name_parts) > 1 else '',
+                'fcl_level':  round(cfcl),
+                'alert_reason': f'Accuracy {accuracy}% in {r[8]}',
+                'is_struggling': True,
+            })
     return struggling
 
 
@@ -294,33 +307,36 @@ def struggling_students(db: Session = Depends(get_db),
 #  HEATMAP
 # ═══════════════════════════════════════════════════════════════════
 
-@router.get('/heatmap/{teacher_id}')
-def topic_heatmap(teacher_id: int,
-                  subject_id: Optional[int] = None,
+@router.get('/heatmap/{lecturer_id}')
+def topic_heatmap(lecturer_id: int,
+                  course_id: Optional[int] = None,
                   db: Session = Depends(get_db),
-                  current: Teacher = Depends(get_current_teacher)):
-    student_rows = _get_students_for_teacher(teacher_id, db)
+                  current: Lecturer = Depends(get_current_lecturer)):
+    student_rows = _get_students_for_lecturer(lecturer_id, db)
     if not student_rows:
         return {'students': [], 'topics': [], 'data': []}
 
-    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
-    subject_ids = ([subject_id] if subject_id
-                   else _get_teacher_subject_ids(teacher, db))
+    lecturer    = db.query(Lecturer).filter(Lecturer.id == lecturer_id).first()
+    course_ids  = ([course_id] if course_id else _get_lecturer_course_ids(lecturer))
 
     topic_ids = []
-    for subj_id in subject_ids:
+    for c_id in course_ids:
         rows = db.execute(text(
-            'SELECT DISTINCT topic_id FROM topic_fcl WHERE subject_id=:sid'
-        ), {'sid': subj_id}).fetchall()
+            'SELECT DISTINCT topic_id FROM topic_fcl WHERE course_id=:cid'
+        ), {'cid': c_id}).fetchall()
         topic_ids.extend(r[0] for r in rows if r[0] not in topic_ids)
 
     if not topic_ids:
         return {'students': [], 'topics': topic_ids, 'data': []}
 
+    seen_sids = []
     matrix = []
     students_meta = []
     for r in student_rows:
         sid = r[0]
+        if sid in seen_sids:
+            continue
+        seen_sids.append(sid)
         row_data = []
         for topic_id in topic_ids:
             res = db.execute(text(
@@ -331,7 +347,7 @@ def topic_heatmap(teacher_id: int,
             mastery = 0 if fcl <= 0 else (1 if fcl <= 5 else (2 if fcl <= 10 else 3))
             row_data.append(mastery)
         matrix.append(row_data)
-        students_meta.append({'id': sid, 'name': r[1], 'grade_label': r[4]})
+        students_meta.append({'id': sid, 'name': r[1], 'programme_name': r[4]})
 
     return {
         'students': students_meta,
@@ -341,19 +357,18 @@ def topic_heatmap(teacher_id: int,
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  ENGAGEMENT REPORT  (FIXED TIMEZONE)
+#  ENGAGEMENT REPORT
 # ═══════════════════════════════════════════════════════════════════
 
-@router.get('/engagement/{teacher_id}')
-def engagement_report(teacher_id: int,
+@router.get('/engagement/{lecturer_id}')
+def engagement_report(lecturer_id: int,
                       days_inactive: int = 7,
                       db: Session = Depends(get_db),
-                      current: Teacher = Depends(get_current_teacher)):
-    student_rows = _get_students_for_teacher(teacher_id, db)
-    cutoff       = datetime.now(timezone.utc) - timedelta(days=days_inactive)
+                      current: Lecturer = Depends(get_current_lecturer)):
+    student_rows = _get_students_for_lecturer(lecturer_id, db)
     result       = []
+    seen_sids    = set()
 
-    seen_sids = set()
     for r in student_rows:
         sid = r[0]
         if sid in seen_sids:
@@ -375,34 +390,23 @@ def engagement_report(teacher_id: int,
         elif last_c:
             last_activity = last_c
 
-        # Normalise to UTC to avoid offset-naive/aware mix
-        if last_activity and last_activity.tzinfo is not None:
-            last_activity_utc = last_activity.astimezone(timezone.utc)
-        elif last_activity:
-            last_activity_utc = last_activity.replace(tzinfo=timezone.utc)
-        else:
-            last_activity_utc = None
-
-        days = (
-            (datetime.now(timezone.utc) - last_activity_utc).days
-            if last_activity_utc else 999
-        )
+        days = (datetime.utcnow() - last_activity).days if last_activity else 999
         if days >= days_inactive:
             result.append({
                 'student_id':    sid,
                 'name':          r[1],
                 'email':         r[2],
-                'grade_label':   r[4],
-                'class_name':    r[5],
+                'programme_name':r[4],
+                'level':         r[5],
                 'days_inactive': days,
                 'last_activity': last_activity.isoformat() if last_activity else None,
             })
 
     result.sort(key=lambda x: x['days_inactive'], reverse=True)
     return {
-        'students':      result,
-        'days_inactive': days_inactive,
-        'total_students':len(seen_sids),
+        'students':       result,
+        'days_inactive':  days_inactive,
+        'total_students': len(seen_sids),
     }
 
 
@@ -412,75 +416,65 @@ def engagement_report(teacher_id: int,
 
 @router.get('/directives')
 def list_directives(db: Session = Depends(get_db),
-                    current: Teacher = Depends(get_current_teacher)):
+                    current: Lecturer = Depends(get_current_lecturer)):
     rows = db.query(TeacherAiDirective).filter(
-        TeacherAiDirective.teacher_id == current.id
+        TeacherAiDirective.lecturer_id == current.id
     ).order_by(TeacherAiDirective.created_at.desc()).all()
     return [
         {
-            'id':           d.id,
-            'student_id':   d.student_id,
-            'subject_id':   d.subject_id,
-            'directive':    d.directive,
-            'instruction':  d.directive,
-            'label':        d.label,
-            'is_active':    d.is_active,
-            'created_at':   d.created_at.isoformat() if d.created_at else None,
+            'id':          d.id,
+            'student_id':  d.student_id,
+            'course_id':   d.course_id,
+            'directive':   d.directive,
+            'instruction': d.directive,
+            'label':       d.label,
+            'is_active':   d.is_active,
+            'created_at':  d.created_at.isoformat() if d.created_at else None,
         }
         for d in rows
     ]
 
-@router.get('/directives/{teacher_id}')
-def list_directives_by_id(teacher_id: int,
-                           db: Session = Depends(get_db),
-                           current: Teacher = Depends(get_current_teacher)):
-    return list_directives(db=db, current=current)
-
 @router.post('/directive')
 def create_directive(req: DirectiveCreate,
                      db: Session = Depends(get_db),
-                     current: Teacher = Depends(get_current_teacher)):
+                     current: Lecturer = Depends(get_current_lecturer)):
     if not req.directive.strip():
         raise HTTPException(400, 'Directive text is required')
     d = TeacherAiDirective(
-        teacher_id = current.id,
-        student_id = req.student_id,
-        subject_id = req.subject_id,
-        directive  = req.directive.strip(),
-        label      = req.label,
+        lecturer_id = current.id,
+        student_id  = req.student_id,
+        course_id   = req.course_id,
+        directive   = req.directive.strip(),
+        label       = req.label,
     )
     db.add(d)
     db.commit()
     db.refresh(d)
-    return {
-        'id':      d.id,
-        'status':  'created',
-        'message': f'Directive will be applied to AI responses',
-    }
+    return {'id': d.id, 'status': 'created'}
 
 @router.patch('/directive/{directive_id}')
 def update_directive(directive_id: int, req: DirectiveUpdate,
                      db: Session = Depends(get_db),
-                     current: Teacher = Depends(get_current_teacher)):
+                     current: Lecturer = Depends(get_current_lecturer)):
     d = db.query(TeacherAiDirective).filter(
-        TeacherAiDirective.id         == directive_id,
-        TeacherAiDirective.teacher_id == current.id,
+        TeacherAiDirective.id          == directive_id,
+        TeacherAiDirective.lecturer_id == current.id,
     ).first()
     if not d:
         raise HTTPException(404, 'Directive not found')
-    if req.directive  is not None: d.directive = req.directive
-    if req.label      is not None: d.label     = req.label
-    if req.is_active  is not None: d.is_active = req.is_active
+    if req.directive is not None: d.directive = req.directive
+    if req.label     is not None: d.label     = req.label
+    if req.is_active is not None: d.is_active = req.is_active
     db.commit()
     return {'status': 'updated'}
 
 @router.delete('/directive/{directive_id}')
 def delete_directive(directive_id: int,
                      db: Session = Depends(get_db),
-                     current: Teacher = Depends(get_current_teacher)):
+                     current: Lecturer = Depends(get_current_lecturer)):
     d = db.query(TeacherAiDirective).filter(
-        TeacherAiDirective.id         == directive_id,
-        TeacherAiDirective.teacher_id == current.id,
+        TeacherAiDirective.id          == directive_id,
+        TeacherAiDirective.lecturer_id == current.id,
     ).first()
     if not d:
         raise HTTPException(404, 'Directive not found')
@@ -496,34 +490,34 @@ def delete_directive(directive_id: int,
 @router.post('/award-points')
 def award_points(req: AwardPointsRequest,
                  db: Session = Depends(get_db),
-                 current: Teacher = Depends(get_current_teacher)):
+                 current: Lecturer = Depends(get_current_lecturer)):
     if req.points < 1 or req.points > 500:
         raise HTTPException(400, 'Points must be between 1 and 500')
 
     from services.points_service import award_topic_points
     result = award_topic_points(
         student_id = req.student_id,
-        subject_id = req.subject_id,
+        course_id  = req.course_id,
         topic_id   = req.topic_id,
         points     = req.points,
-        reason     = f'teacher_award: {req.reason}',
+        reason     = f'lecturer_award: {req.reason}',
         db         = db,
-        source_id  = f'teacher_{current.id}',
+        source_id  = f'lecturer_{current.id}',
     )
 
     db.add(TeacherPointAward(
-        teacher_id = current.id,
-        student_id = req.student_id,
-        subject_id = req.subject_id,
-        topic_id   = req.topic_id,
-        points     = req.points,
-        reason     = req.reason,
+        lecturer_id = current.id,
+        student_id  = req.student_id,
+        course_id   = req.course_id,
+        topic_id    = req.topic_id,
+        points      = req.points,
+        reason      = req.reason,
     ))
     db.add(Notification(
         receiver_type = 'student',
         receiver_id   = req.student_id,
         type          = 'points_awarded',
-        title         = f'🎁 +{req.points} points from your teacher!',
+        title         = f'🎁 +{req.points} points from your lecturer!',
         body          = (
             f'{current.name} awarded you {req.points} points '
             f'in {req.topic_id.replace("_", " ")}. Reason: {req.reason}'
@@ -541,31 +535,31 @@ def award_points(req: AwardPointsRequest,
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  BULK TIP NOTIFICATION
+#  BULK TIP
 # ═══════════════════════════════════════════════════════════════════
 
 @router.post('/messages/bulk-tip')
 def bulk_tip(req: BulkTipRequest,
              db: Session = Depends(get_db),
-             current: Teacher = Depends(get_current_teacher)):
+             current: Lecturer = Depends(get_current_lecturer)):
     from services.llm_service import call_groq
     prompt = (
-        f'Give a short (2–3 sentence) actionable study tip for a student '
+        f'Give a short (2–3 sentence) actionable study tip for a tertiary student '
         f'struggling with {req.topic_id.replace("_", " ")}. '
         + (f'Context: {req.custom_note}' if req.custom_note else '')
-        + ' Be encouraging and specific.'
+        + ' Be encouraging, specific, and academically appropriate.'
     )
     try:
         tip_text, _, _ = call_groq(prompt=prompt, max_tokens=150, temperature=0.7)
     except Exception:
-        tip_text = f'Keep practising {req.topic_id.replace("_", " ")} step by step.'
+        tip_text = f'Continue practising {req.topic_id.replace("_", " ")} methodically.'
 
     topic_label = req.topic_id.replace('_', ' ').title()
     for sid in req.student_ids:
         db.add(Notification(
             receiver_type = 'student',
             receiver_id   = sid,
-            sender_type   = 'teacher',
+            sender_type   = 'lecturer',
             sender_id     = current.id,
             type          = 'teacher_tip',
             title         = f'💡 Study tip: {topic_label}',
@@ -581,27 +575,27 @@ def bulk_tip(req: BulkTipRequest,
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  GRADE ASSIGNMENTS (read-only for teacher)
+#  COURSE ASSIGNMENTS (read-only)
 # ═══════════════════════════════════════════════════════════════════
 
-@router.get('/grade-assignments/{teacher_id}')
-def grade_assignments(teacher_id: int, db: Session = Depends(get_db),
-                      current: Teacher = Depends(get_current_teacher)):
-    teacher = db.query(Teacher).filter(Teacher.id == teacher_id).first()
-    if not teacher:
-        raise HTTPException(404, 'Teacher not found')
+@router.get('/course-assignments/{lecturer_id}')
+def course_assignments(lecturer_id: int, db: Session = Depends(get_db),
+                       current: Lecturer = Depends(get_current_lecturer)):
+    lecturer = db.query(Lecturer).filter(Lecturer.id == lecturer_id).first()
+    if not lecturer:
+        raise HTTPException(404, 'Lecturer not found')
     result = []
-    for tcs in teacher.class_subjects:
-        cs = tcs.class_subject
+    for lca in lecturer.course_assignments:
+        pcl = lca.pcl
         result.append({
-            'id':           tcs.id,
-            'subject_id':   cs.subject_id,
-            'subject_name': cs.subject.name,
-            'subject_code': cs.subject.code,
-            'class_id':     cs.class_id,
-            'class_name':   cs.class_.name,
-            'grade_label':  cs.class_.grade.label,
-            'grade_id':     cs.class_.grade_id,
+            'id':             lca.id,
+            'course_id':      pcl.course_id,
+            'course_name':    pcl.course.name,
+            'course_code':    pcl.course.code,
+            'programme_id':   pcl.programme_id,
+            'programme_name': pcl.programme.name,
+            'level':          pcl.level,
+            'semester':       pcl.semester,
         })
     return result
 
@@ -612,7 +606,7 @@ def grade_assignments(teacher_id: int, db: Session = Depends(get_db),
 
 @router.get('/student/{student_id}/deep-dive')
 def student_deep_dive(student_id: int, db: Session = Depends(get_db),
-                      current: Teacher = Depends(get_current_teacher)):
+                      current: Lecturer = Depends(get_current_lecturer)):
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(404, 'Student not found')
@@ -621,29 +615,29 @@ def student_deep_dive(student_id: int, db: Session = Depends(get_db),
         Assessment.student_id == student_id
     ).order_by(Assessment.created_at.desc()).limit(50).all()
 
-    total   = len(assessments)
-    correct = sum(1 for a in assessments if a.is_correct)
+    total      = len(assessments)
+    correct    = sum(1 for a in assessments if a.is_correct)
     accuracy   = round(correct / total * 100) if total > 0 else 0
     avg_hints  = round(sum(a.hints_used or 0 for a in assessments) / total, 2) if total > 0 else 0
 
     try:
         from services.llm_service import call_groq
         prompt = (
-            f'Student: accuracy={accuracy}%, avg_hints={avg_hints}, '
+            f'Tertiary student: accuracy={accuracy}%, avg_hints={avg_hints}, '
             f'total_questions={total}. '
-            'In 2 sentences, give a specific teacher recommendation. Be actionable.'
+            'In 2 sentences, give a specific lecturer recommendation. Be actionable.'
         )
         rec, _, _ = call_groq(prompt=prompt, max_tokens=100)
     except Exception:
-        rec = f'Student has {accuracy}% accuracy. Review weak topics with targeted hints.'
+        rec = f'Student has {accuracy}% accuracy. Recommend targeted revision sessions.'
 
     return {
-        'student_id':        student_id,
-        'name':              student.name,
-        'grade_label':       student.grade.label if student.grade else '—',
-        'class_name':        student.class_.name if student.class_ else '—',
-        'accuracy':          accuracy,
-        'avg_hint_density':  avg_hints,
-        'total_questions':   total,
-        'ai_recommendations':rec,
+        'student_id':         student_id,
+        'name':               student.name,
+        'programme_name':     student.programme.name if student.programme else '—',
+        'current_level':      student.current_level,
+        'accuracy':           accuracy,
+        'avg_hint_density':   avg_hints,
+        'total_questions':    total,
+        'ai_recommendations': rec,
     }

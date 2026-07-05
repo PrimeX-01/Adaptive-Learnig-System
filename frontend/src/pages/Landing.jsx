@@ -1,5 +1,4 @@
-import { Link, Navigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { Link } from 'react-router-dom';
 import styles from './Landing.module.css';
 
 const MARQUEE_ITEMS = [
@@ -30,13 +29,7 @@ const FEATURES = [
 ];
 
 export default function Landing() {
-  const { isAuthenticated, isTeacher, loading } = useAuth();
   const doubled = [...MARQUEE_ITEMS, ...MARQUEE_ITEMS];
-
-  // If user is already logged in, send them straight to their dashboard
-  if (!loading && isAuthenticated) {
-    return <Navigate to={isTeacher ? '/teacher' : '/student'} replace />;
-  }
 
   return (
     <div className={styles.page}>
@@ -47,7 +40,7 @@ export default function Landing() {
 
         <div className={styles.badge}>
           <span className={styles.pulseDot} />
-          AI-Powered Adaptive Learning · CSC402
+          AI-Powered Adaptive Learning · 
         </div>
 
         <h1 className={styles.h1}>
@@ -138,7 +131,7 @@ export default function Landing() {
           <a href="#">Privacy</a><a href="#">Terms</a>
           <a href="#">Contact</a><a href="#">CSC402</a>
         </div>
-        <div className={styles.footerCopy}>© 2026 SiveAdapt · University of Eswatini</div>
+        <div className={styles.footerCopy}>© 2026 SiveAdapt · </div>
       </footer>
     </div>
   );

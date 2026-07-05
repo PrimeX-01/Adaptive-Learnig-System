@@ -8,7 +8,7 @@ import base64
 from urllib.parse import quote
 from sqlalchemy.orm import Session
 from groq import Groq
-from db.models import ConversationMessage, LLMApiLog
+from db.models import ConversationMessage, LlmApiLog
 
 # ── Groq configuration ──────────────────────────────────────────────
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
@@ -182,7 +182,7 @@ def save_messages(session_id: int, user_msg: str, ai_msg: str, db: Session):
 
 def log_groq_call(student_id, endpoint, model, tokens_in, tokens_out, latency_ms, db):
     try:
-        db.add(LLMApiLog(
+        db.add(LlmApiLog(
             student_id=student_id, endpoint=endpoint, model_used=model,
             tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
         ))

@@ -1,18 +1,20 @@
-# Node modules
-node_modules/
-frontend/node_modules/
-
-# Build cache
-frontend/.cache/
-frontend/node_modules/.cache/
+# Environment variables & secrets
+.env
+*.env
+.env.*
 
 # Python
-venv/
 __pycache__/
 *.pyc
-*.pyo
-.env
+venv/
+.venv/
+*.egg-info/
 
-# OS
+# Node
+node_modules/
+dist/
+build/
+
+# OS junk
 .DS_Store
 Thumbs.db

@@ -529,13 +529,19 @@ export default function QuizPage() {
       <div className={`px-2.5 py-1 rounded-full text-xs font-medium ${styleInfo.class}`}>
         {styleInfo.icon} {styleInfo.label}
       </div>
-      <select value={subjectCode} onChange={e=>handleSubjectChange(e.target.value)} className='bg-input border border-border rounded-lg px-3 py-1.5 text-primary text-sm focus:border-teal/60 focus:outline-none'>
-        {enrolled.length>0?enrolled.map(e=><option key={e.subject_code} value={e.subject_code}>{e.subject_name}</option>):Object.entries(SUBJECT_TOPICS).map(([code,s])=><option key={code} value={code}>{s.name}</option>)}
-      </select>
-      <select value={topicId} onChange={e=>handleTopicChange(e.target.value)} className='bg-input border border-border rounded-lg px-3 py-1.5 text-primary text-sm focus:border-teal/60 focus:outline-none'>
-        {currentTopics.map(t=><option key={t} value={t}>{t.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</option>)}
-      </select>
-      <span className='badge-teal stat-number text-xs'>FCL {subjectFclDisplay}</span>
+      {enrolled.length > 0 ? (
+        <>
+          <select value={subjectCode} onChange={e=>handleSubjectChange(e.target.value)} className='bg-input border border-border rounded-lg px-3 py-1.5 text-primary text-sm focus:border-teal/60 focus:outline-none'>
+            {enrolled.map(e=><option key={e.subject_code} value={e.subject_code}>{e.subject_name}</option>)}
+          </select>
+          <select value={topicId} onChange={e=>handleTopicChange(e.target.value)} className='bg-input border border-border rounded-lg px-3 py-1.5 text-primary text-sm focus:border-teal/60 focus:outline-none'>
+            {currentTopics.map(t=><option key={t} value={t}>{t.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</option>)}
+          </select>
+          <span className='badge-teal stat-number text-xs'>FCL {subjectFclDisplay}</span>
+        </>
+      ) : (
+        <span className='text-muted text-xs'>Not enrolled in any subjects yet</span>
+      )}
     </div>
   );
 
@@ -550,6 +556,23 @@ export default function QuizPage() {
         setShowResumeModal(false);localStorage.removeItem(`quiz_incomplete_${sid}`);
         fetchQuestion(savedQuiz.topicId,savedQuiz.fcl);
       }} onNew={()=>{setShowResumeModal(false);localStorage.removeItem(`quiz_incomplete_${sid}`);setSavedQuiz(null);}}/>
+    </PageShell>
+  );
+
+  // ── Not enrolled in any subjects ──────────────────────────────
+  if(ready && enrolled.length === 0) return (
+    <PageShell title='Quiz' subtitle='No subjects enrolled' actions={headerActions}>
+      <div className='flex flex-col items-center justify-center py-24 text-center gap-4'>
+        <span className='text-6xl'>📚</span>
+        <h2 className='text-primary font-semibold text-lg'>No subjects yet</h2>
+        <p className='text-muted text-sm max-w-sm'>
+          You are not enrolled in any subjects. Your teacher needs to register
+          and assign you to a subject before you can take quizzes.
+        </p>
+        <button onClick={()=>navigate('/student')} className='btn-primary text-sm mt-2'>
+          ← Back to Dashboard
+        </button>
+      </div>
     </PageShell>
   );
 

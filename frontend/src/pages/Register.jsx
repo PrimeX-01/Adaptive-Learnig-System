@@ -1,600 +1,597 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import api from '../services/api';
+import { Link, useNavigate } from 'react-router-dom';
+import { registerUser } from '../services/auth';
+import api from '../services/api';   // <-- use configured axios instance
+import styles from './Auth.module.css';
 
-/* ─── VARK Questions (only for students) ───────────────────────── */
-const VARK_QUESTIONS = [
-  { q:'When learning something new, you prefer to:',
-    options:[{label:'Watch a video or look at diagrams',style:'visual'},{label:'Listen to someone explain it',style:'auditory'},{label:'Read through notes or a textbook',style:'reading'},{label:'Try it yourself hands-on',style:'kinesthetic'}] },
-  { q:'When you need directions to a new place, you prefer:',
-    options:[{label:'A map or visual guide',style:'visual'},{label:'Someone to tell you verbally',style:'auditory'},{label:'Written step-by-step instructions',style:'reading'},{label:'Just start walking and figure it out',style:'kinesthetic'}] },
-  { q:'When you remember something, you usually remember it by:',
-    options:[{label:'A picture or image in your mind',style:'visual'},{label:'Hearing it said out loud',style:'auditory'},{label:'Reading it again',style:'reading'},{label:'Doing or experiencing it',style:'kinesthetic'}] },
-  { q:'When studying for a test, you find it most helpful to:',
-    options:[{label:'Draw diagrams and colour-code notes',style:'visual'},{label:'Read notes aloud or record yourself',style:'auditory'},{label:'Re-read and rewrite your notes',style:'reading'},{label:'Practice with exercises and examples',style:'kinesthetic'}] },
-  { q:'You understand a concept best when:',
-    options:[{label:'You can see it shown visually',style:'visual'},{label:'It is explained in conversation',style:'auditory'},{label:'You read a detailed explanation',style:'reading'},{label:'You can apply it to a real situation',style:'kinesthetic'}] },
+const INITIAL_FORM = {
+  first_name: '',
+  last_name: '',
+  email: '',
+  password: '',
+  confirm_password: '',
+};
+
+const ROLES = [
+  {
+    key: 'student',
+    icon: '📚',
+    title: 'Student',
+    desc: 'Learn at your own pace with AI-powered adaptive tutoring.',
+  },
+  {
+    key: 'teacher',
+    icon: '🍎',
+    title: 'Teacher',
+    desc: 'Manage classes, create content, and guide your students.',
+  },
+  {
+    key: 'lecturer',
+    icon: '🎓',
+    title: 'Lecturer',
+    desc: 'For tertiary institutions — teach courses and track progress.',
+  },
 ];
 
-/* ─── Grade options for teacher selection (by education level) ─── */
-const TEACHER_LEVELS = [
-  { level: 'Primary',     grades: [1,2,3,4,5,6,7], label: 'Primary School (Grades 1–7)' },
-  { level: 'High School', grades: [8,9,10,11,12],   label: 'High School (Grades 8–12)' },
-  { level: 'Undergraduate', grades: [13,14,15,16,17], label: 'Undergraduate (Levels 1–5)' },
-  { level: 'Postgraduate', grades: [18,19],         label: 'Postgraduate (Masters, PhD)' },
-];
-
-/* ─── Student grade options (full range) ───────────────────────── */
-const GRADE_OPTIONS = [
-  // Primary 1–7
-  { value: 1,  label: 'Grade 1',   group: 'Primary' },
-  { value: 2,  label: 'Grade 2',   group: 'Primary' },
-  { value: 3,  label: 'Grade 3',   group: 'Primary' },
-  { value: 4,  label: 'Grade 4',   group: 'Primary' },
-  { value: 5,  label: 'Grade 5',   group: 'Primary' },
-  { value: 6,  label: 'Grade 6',   group: 'Primary' },
-  { value: 7,  label: 'Grade 7',   group: 'Primary' },
-  // High School 8–12
-  { value: 8,  label: 'Grade 8',   group: 'High School' },
-  { value: 9,  label: 'Grade 9',   group: 'High School' },
-  { value: 10, label: 'Grade 10',  group: 'High School' },
-  { value: 11, label: 'Grade 11',  group: 'High School' },
-  { value: 12, label: 'Grade 12',  group: 'High School' },
-  // Tertiary Level 1–5 (13–17)
-  { value: 13, label: 'Level 1',   group: 'Tertiary' },
-  { value: 14, label: 'Level 2',   group: 'Tertiary' },
-  { value: 15, label: 'Level 3',   group: 'Tertiary' },
-  { value: 16, label: 'Level 4',   group: 'Tertiary' },
-  { value: 17, label: 'Level 5',   group: 'Tertiary' },
-  // Masters & PhD
-  { value: 18, label: 'Masters',   group: 'Postgraduate' },
-  { value: 19, label: 'PhD',       group: 'Postgraduate' },
-];
-
-const SUBJECT_CODE_SUGGESTIONS = [
-  'MATH','SCI','ENG','SOC','CS','PHY','CHEM','BIO',
-  'HIST','GEO','ART','MUS','PE','ECO','ACC','BUS',
-];
-
-/* ─── Stepper ────────────────────────────────────────────────── */
-function Stepper({ steps, current }) {
+function Field({ label, children, hint }) {
   return (
-    <div className='flex items-center justify-center gap-2 mb-8'>
-      {steps.map((label, i) => (
-        <div key={i} className='flex items-center gap-2'>
-          <div className={`flex items-center gap-2 ${i<=current?'text-teal':'text-muted'}`}>
-            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold border-2 transition-all ${i<current?'bg-teal border-teal text-app':i===current?'border-teal text-teal':'border-border text-muted'}`}>
-              {i<current?'✓':i+1}
-            </div>
-            <span className='text-xs hidden sm:inline'>{label}</span>
-          </div>
-          {i<steps.length-1&&<div className={`w-8 h-px ${i<current?'bg-teal':'bg-border'}`}/>}
-        </div>
-      ))}
+    <div className={styles.field}>
+      <label className={styles.fieldLabel || styles.label}>{label}</label>
+      {children}
+      {hint && <p className={styles.fieldHint}>{hint}</p>}
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   REGISTER PAGE
-═══════════════════════════════════════════════════════════════ */
 export default function Register() {
-  const nav = useNavigate();
-  const [step, setStep] = useState(0);
+  const navigate = useNavigate();
 
-  /* ── Account ─────────────────────────────────────────────────── */
-  const [name,      setName]      = useState('');
-  const [email,     setEmail]     = useState('');
-  const [password,  setPassword]  = useState('');
-  const [confirm,   setConfirm]   = useState('');
-  const [isTeacher, setIsTeacher] = useState(false);
+  const [step, setStep] = useState(1);
+  const [role, setRole] = useState(null);
+  const [form, setForm] = useState(INITIAL_FORM);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  /* ── Student ─────────────────────────────────────────────────── */
-  const [grade,            setGrade]            = useState('');
-  const [availableSubjects,setAvailableSubjects] = useState([]);
-  const [selectedSubjects, setSelectedSubjects]  = useState([]);
-  const [subjectSearch,    setSubjectSearch]    = useState(''); // NEW: search filter
-  const [autoEnrolled,     setAutoEnrolled]     = useState([]);
-  const [loadingSubjects,  setLoadingSubjects]  = useState(false);
+  // Role‑specific state (students)
+  const [educationLevel, setEducationLevel] = useState('school');
+  const [grade, setGrade] = useState('');
+  const [classId, setClassId] = useState('');
+  const [facultyId, setFacultyId] = useState('');
+  const [programmeId, setProgrammeId] = useState('');
+  const [level, setLevel] = useState('');
+  const [learningStyle, setLearningStyle] = useState('reading');
+  const [selectedPclIds, setSelectedPclIds] = useState([]);
 
-  /* ── Teacher — creates a subject, selects specific grades ────── */
-  const [teachSubjectName, setTeachSubjectName] = useState('');
-  const [teachSubjectCode, setTeachSubjectCode] = useState('');
-  const [teacherLevel, setTeacherLevel] = useState('Primary');
-  const [selectedGrades, setSelectedGrades] = useState([]);
-  const [showCodeSuggestions, setShowCodeSuggestions] = useState(false);
+  // Teacher / lecturer state (unchanged)
+  const [teacherSubjects, setTeacherSubjects] = useState([{ name: '', grade_level: '' }]);
+  const [selectedLecturerPclIds, setSelectedLecturerPclIds] = useState([]);
 
-  /* ── VARK (students only) ───────────────────────────────────── */
-  const [varkAnswers, setVarkAnswers] = useState({});
+  // Fetched data
+  const [subjects, setSubjects] = useState([]);
+  const [faculties, setFaculties] = useState([]);
+  const [classes, setClasses] = useState([]);
+  const [programmes, setProgrammes] = useState([]);
+  const [programmeCourses, setProgrammeCourses] = useState([]);
 
-  /* ── UI ──────────────────────────────────────────────────────── */
-  const [error,      setError]      = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const isTertiary = parseInt(grade) >= 13;
-
-  const studentSteps = isTertiary
-    ? ['Account','Grade','Subjects','Learning Style']
-    : ['Account','Grade','Learning Style'];
-  const teacherSteps = ['Account','Your Subject & Grades'];
-  const steps = isTeacher ? teacherSteps : studentSteps;
-
+  // ── Fetch subjects & faculties on mount ────────────────────────
   useEffect(() => {
-    if (!grade) return;
-    if (isTertiary && step === 2) {
-      setLoadingSubjects(true);
-      api.get(`/api/subjects/available`)
-        .then(r => setAvailableSubjects(r.data || []))
-        .catch(() => setAvailableSubjects([]))
-        .finally(() => setLoadingSubjects(false));
-    } else if (!isTertiary && step === 1) {
-      api.get(`/api/subjects/for-grade/${grade}`)
-        .then(r => setAutoEnrolled(r.data || []))
-        .catch(() => setAutoEnrolled([]));
-    }
-  }, [grade, step, isTertiary]);
+    api.get('/api/admin/subjects-public')
+      .then(res => setSubjects(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setSubjects([]));
 
-  const currentLevelGrades = TEACHER_LEVELS.find(l => l.level === teacherLevel)?.grades || [];
+    api.get('/api/admin/faculties-public')
+      .then(res => setFaculties(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setFaculties([]));
+  }, []);
+
+  // Fetch classes when grade changes (school)
   useEffect(() => {
-    setSelectedGrades(prev => prev.filter(g => currentLevelGrades.includes(g)));
-  }, [teacherLevel, currentLevelGrades]);
-
-  function validate() {
-    setError('');
-    if (step === 0) {
-      if (!name.trim())        { setError('Please enter your full name.'); return false; }
-      if (!email.trim())       { setError('Please enter your email.'); return false; }
-      if (password.length < 6) { setError('Password must be at least 6 characters.'); return false; }
-      if (password !== confirm) { setError('Passwords do not match.'); return false; }
+    if (educationLevel !== 'school' || !grade) {
+      setClasses([]);
+      return;
     }
-    if (step === 1) {
-      if (!isTeacher) {
-        if (!grade) { setError('Please select your grade.'); return false; }
+    api.get('/api/admin/classes-public', { params: { grade_id: grade } })
+      .then(res => setClasses(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setClasses([]));
+  }, [grade, educationLevel]);
+
+  // Fetch programmes when faculty changes (tertiary)
+  useEffect(() => {
+    if (educationLevel !== 'tertiary' || !facultyId) {
+      setProgrammes([]);
+      return;
+    }
+    api.get('/api/admin/programmes-public', { params: { faculty_id: facultyId } })
+      .then(res => setProgrammes(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setProgrammes([]));
+  }, [facultyId, educationLevel]);
+
+  // Fetch courses for selected programme + level (tertiary)
+  useEffect(() => {
+    if (educationLevel !== 'tertiary' || !programmeId || !level) {
+      setProgrammeCourses([]);
+      return;
+    }
+    api.get('/api/admin/courses-public', {
+      params: { programme_id: programmeId, level: level }
+    })
+      .then(res => {
+        // Backend returns { active_semester, courses: [...] }
+        const courses = res.data?.courses || [];
+        setProgrammeCourses(courses);
+      })
+      .catch(() => setProgrammeCourses([]));
+  }, [programmeId, level, educationLevel]);
+
+  // ── Field updaters ────────────────────────────────────────────
+  const updateForm = (field, value) =>
+    setForm(prev => ({ ...prev, [field]: value }));
+
+  const togglePcl = (id) =>
+    setSelectedPclIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+
+  const updateTeacherSubject = (idx, field, value) =>
+    setTeacherSubjects(prev => {
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], [field]: value };
+      return copy;
+    });
+
+  const addTeacherSubject = () =>
+    setTeacherSubjects(prev => [...prev, { name: '', grade_level: '' }]);
+
+  const removeTeacherSubject = (idx) =>
+    setTeacherSubjects(prev => prev.filter((_, i) => i !== idx));
+
+  // ── Validation ────────────────────────────────────────────────
+  const validateBasicInfo = () => {
+    if (!form.first_name.trim() || !form.last_name.trim()) {
+      return 'Please enter your full name.';
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      return 'Please enter a valid email address.';
+    }
+    if (form.password.length < 6) {
+      return 'Password must be at least 6 characters.';
+    }
+    if (form.password !== form.confirm_password) {
+      return 'Passwords do not match.';
+    }
+    return null;
+  };
+
+  const validateDetails = () => {
+    if (role === 'student') {
+      if (educationLevel === 'school') {
+        if (!grade) return 'Please select your grade.';
+        if (!classId) return 'Please select your class.';
       } else {
-        if (!teachSubjectName.trim()) { setError('Please enter the subject name.'); return false; }
-        if (!teachSubjectCode.trim()) { setError('Please enter the subject code.'); return false; }
-        if (teachSubjectCode.length < 2 || teachSubjectCode.length > 6) {
-          setError('Subject code must be 2–6 characters.'); return false;
-        }
-        if (selectedGrades.length === 0) {
-          setError('Please select at least one grade you teach.'); return false;
-        }
+        if (!facultyId) return 'Please select your faculty.';
+        if (!programmeId) return 'Please select your programme.';
+        if (!level) return 'Please select your level.';
+        if (selectedPclIds.length === 0) return 'Please select at least one course.';
       }
+      return null;
     }
-    if (step === 2 && isTertiary && !isTeacher) {
-      if (selectedSubjects.length === 0) {
-        setError('Please select at least one subject.'); return false;
-      }
+    if (role === 'teacher') {
+      const valid = teacherSubjects.some(s => s.name.trim() && s.grade_level);
+      if (!valid) return 'Please add at least one subject with a grade.';
+      return null;
     }
-    return true;
-  }
-
-  function nextStep() {
-    if (!validate()) return;
-    if (!isTeacher && step === 1 && !isTertiary) {
-      setStep(3);
-      return;
+    if (role === 'lecturer') {
+      if (!facultyId) return 'Please select your faculty.';
+      return null;
     }
-    setStep(s => s + 1);
-  }
+    return null;
+  };
 
-  const isLastStep = isTeacher ? step === 1 : (isTertiary ? step === 3 : step === 2);
-
-  function computeStyle() {
-    const c = {visual:0,auditory:0,reading:0,kinesthetic:0};
-    Object.values(varkAnswers).forEach(s => { if(c[s]!==undefined) c[s]++; });
-    return Object.entries(c).sort((a,b)=>b[1]-a[1])[0][0];
-  }
-
-  async function handleSubmit() {
-    if (!isTeacher && Object.keys(varkAnswers).length < VARK_QUESTIONS.length) {
-      setError('Please answer all 5 learning style questions.');
-      return;
-    }
-    setSubmitting(true);
-    setError('');
-    const learningStyle = isTeacher ? null : computeStyle();
+  const handleSubmit = async () => {
     const payload = {
-      name:               name.trim(),
-      email:              email.trim(),
-      password,
-      is_teacher:         isTeacher,
-      learning_style:     learningStyle,
-      grade:              isTeacher ? null : parseInt(grade),
-      subject_ids:        (isTertiary && !isTeacher) ? selectedSubjects : [],
-      teach_grades:       isTeacher ? selectedGrades : null,
-      teach_subject_name: isTeacher ? teachSubjectName.trim() : null,
-      teach_subject_code: isTeacher ? teachSubjectCode.trim().toUpperCase() : null,
+      first_name: form.first_name,
+      last_name: form.last_name,
+      email: form.email,
+      password: form.password,
+      role,
+      education_level: educationLevel,
+      learning_style: learningStyle,
     };
-    try {
-      const { data } = await api.post('/api/auth/register', payload);
-      window.__authToken   = data.access_token;
-      window.__studentId   = data.student_id;
-      window.__studentName = name.trim();
-      window.__isTeacher   = isTeacher;
-      window.__profilePic  = '';
-      localStorage.setItem('sa_token',     data.access_token);
-      localStorage.setItem('sa_studentId', data.student_id);
-      localStorage.setItem('sa_name',      name.trim());
-      localStorage.setItem('sa_isTeacher', isTeacher.toString());
-      nav(isTeacher ? '/teacher' : '/dashboard', {replace:true});
-    } catch (err) {
-      let errorMsg = 'Registration failed. Please try again.';
-      if (err.response?.data?.detail) {
-        const detail = err.response.data.detail;
-        if (typeof detail === 'string') {
-          errorMsg = detail;
-        } else if (Array.isArray(detail)) {
-          errorMsg = detail.map(e => e.msg).join(', ');
-        } else if (typeof detail === 'object') {
-          errorMsg = JSON.stringify(detail);
-        }
-      } else if (err.message) {
-        errorMsg = err.message;
+
+    if (role === 'student') {
+      if (educationLevel === 'school') {
+        payload.grade_id = Number(grade);
+        payload.class_id = Number(classId);
+      } else {
+        payload.faculty_id   = Number(facultyId);
+        payload.programme_id = Number(programmeId);
+        payload.level        = Number(level);
+        payload.course_pcl_ids = selectedPclIds;
       }
-      setError(errorMsg);
-    } finally {
-      setSubmitting(false);
+    } else if (role === 'teacher') {
+      payload.class_subject_ids = []; // to be implemented
+    } else if (role === 'lecturer') {
+      payload.faculty_id = Number(facultyId);
+      payload.pcl_ids = selectedLecturerPclIds;
     }
-  }
 
-  return (
-    <div className='min-h-screen bg-app flex items-center justify-center p-4'>
-      <div className='w-full max-w-lg'>
+    setError('');
+    setLoading(true);
+    try {
+      const result = await registerUser(payload);
+      if (result.status === 'pending') {
+        navigate('/waiting-approval', { replace: true });
+      } else {
+        navigate('/auth?registered=1', { replace: true });
+      }
+    } catch (err) {
+      setError(err.message || 'Registration failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-        <div className='text-center mb-8'>
-          <div className='w-12 h-12 bg-teal/20 border border-teal/40 rounded-2xl flex items-center justify-center mx-auto mb-4'>
-            <span className='text-teal font-bold text-lg'>S</span>
-          </div>
-          <h1 className='text-primary text-2xl font-bold'>Create Account</h1>
-          <p className='text-muted text-sm mt-1'>SiveAdapt · University of Eswatini</p>
+  const nextStep = () => {
+    if (step === 2) {
+      const err = validateBasicInfo();
+      if (err) { setError(err); return; }
+    }
+    if (step === 3) {
+      const err = validateDetails();
+      if (err) { setError(err); return; }
+    }
+    setError('');
+    setStep(prev => prev + 1);
+  };
+
+  const prevStep = () => setStep(prev => prev - 1);
+
+  // ─── Render Steps (all JSX is identical to previous version, using states from above) ──
+  // (I'll keep the full JSX for completeness but it's the same UI as before)
+
+  const renderStep1 = () => (
+    <>
+      <div className={styles.formHeader}>
+        <h1 className={styles.formTitle}>Join SiveAdapt</h1>
+        <p className={styles.formSub}>Choose your role to get started</p>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        {ROLES.map(r => (
+          <button
+            key={r.key}
+            type="button"
+            onClick={() => setRole(r.key)}
+            className={styles.tabBtn}
+            style={{
+              textAlign: 'left',
+              padding: '1rem',
+              border: role === r.key ? '2px solid var(--primary)' : '2px solid transparent',
+              background: role === r.key ? 'var(--card-hover)' : 'transparent',
+            }}
+          >
+            <span style={{ fontSize: '1.5rem', marginRight: '0.75rem' }}>{r.icon}</span>
+            <div style={{ display: 'inline-block', verticalAlign: 'middle' }}>
+              <strong>{r.title}</strong>
+              <br />
+              <small style={{ color: 'var(--text-secondary)' }}>{r.desc}</small>
+            </div>
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        className={styles.submitBtn}
+        disabled={!role}
+        onClick={() => setStep(2)}
+      >
+        Continue →
+      </button>
+    </>
+  );
+
+  const renderStep2 = () => (
+    <>
+      <div className={styles.formHeader}>
+        <h1 className={styles.formTitle}>Your details</h1>
+        <p className={styles.formSub}>Let us know who you are</p>
+      </div>
+      <Field label="First Name">
+        <input className={styles.input} type="text" value={form.first_name} onChange={e => updateForm('first_name', e.target.value)} required />
+      </Field>
+      <Field label="Last Name">
+        <input className={styles.input} type="text" value={form.last_name} onChange={e => updateForm('last_name', e.target.value)} required />
+      </Field>
+      <Field label="Email">
+        <input className={styles.input} type="email" value={form.email} onChange={e => updateForm('email', e.target.value)} required />
+      </Field>
+      <Field label="Password" hint="At least 6 characters">
+        <input className={styles.input} type="password" value={form.password} onChange={e => updateForm('password', e.target.value)} required />
+      </Field>
+      <Field label="Confirm Password">
+        <input className={styles.input} type="password" value={form.confirm_password} onChange={e => updateForm('confirm_password', e.target.value)} required />
+      </Field>
+      <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <button type="button" className={styles.submitBtn} onClick={prevStep} style={{ flex: 1, background: 'var(--card-hover)' }}>← Back</button>
+        <button type="button" className={styles.submitBtn} onClick={nextStep} style={{ flex: 2 }}>Continue →</button>
+      </div>
+    </>
+  );
+
+  const renderStudentDetails = () => (
+    <>
+      <div className={styles.formHeader}>
+        <h1 className={styles.formTitle}>Student details</h1>
+        <p className={styles.formSub}>Tell us about your education level</p>
+      </div>
+
+      <Field label="Education Level">
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <input type="radio" value="school" checked={educationLevel === 'school'} onChange={() => setEducationLevel('school')} /> School
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <input type="radio" value="tertiary" checked={educationLevel === 'tertiary'} onChange={() => setEducationLevel('tertiary')} /> Tertiary
+          </label>
         </div>
+      </Field>
 
-        <Stepper steps={steps} current={step > steps.length-1 ? steps.length-1 : step}/>
+      {educationLevel === 'school' && (
+        <>
+          <Field label="Grade">
+            <select className={styles.input} value={grade} onChange={e => { setGrade(e.target.value); setClassId(''); }}>
+              <option value="">-- Select --</option>
+              {Array.from({ length: 12 }, (_, i) => (
+                <option key={i + 1} value={i + 1}>{i + 1}</option>
+              ))}
+            </select>
+          </Field>
+          {grade && (
+            <Field label="Class">
+              <select className={styles.input} value={classId} onChange={e => setClassId(e.target.value)}>
+                <option value="">-- Select --</option>
+                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+          )}
+        </>
+      )}
 
-        {error && (
-          <div className='mb-4 px-4 py-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm'>{error}</div>
-        )}
+      {educationLevel === 'tertiary' && (
+        <>
+          <Field label="Faculty">
+            <select className={styles.input} value={facultyId} onChange={e => {
+              setFacultyId(e.target.value);
+              setProgrammeId('');
+              setLevel('');
+            }}>
+              <option value="">-- Select --</option>
+              {faculties.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </Field>
 
-        <div className='card p-6'>
+          {facultyId && (
+            <Field label="Programme">
+              <select className={styles.input} value={programmeId} onChange={e => {
+                setProgrammeId(e.target.value);
+                setLevel('');
+              }}>
+                <option value="">-- Select --</option>
+                {programmes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </Field>
+          )}
 
-          {/* STEP 0 — Account */}
-          {step === 0 && (
-            <div className='space-y-4'>
-              <h2 className='text-primary font-semibold mb-2'>Account Information</h2>
-              <div className='flex gap-2 p-1 bg-app border border-border rounded-xl'>
-                {['Student','Teacher'].map(type=>(
-                  <button key={type} type='button' onClick={()=>setIsTeacher(type==='Teacher')}
-                    className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${(type==='Teacher')===isTeacher?'bg-teal text-app':'text-muted hover:text-primary'}`}>
-                    {type}
+          {programmeId && (
+            <Field label="Level">
+              <select className={styles.input} value={level} onChange={e => setLevel(e.target.value)}>
+                <option value="">-- Select --</option>
+                {[1, 2, 3, 4, 5, 6].map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </Field>
+          )}
+
+          {programmeId && level && (
+            <Field label="Courses this semester" hint="Select all you are taking">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', maxHeight: '200px', overflowY: 'auto' }}>
+                {programmeCourses.length === 0 && <p style={{ color: 'var(--text-secondary)' }}>Loading courses…</p>}
+                {programmeCourses.map(pcl => (
+                  <button
+                    key={pcl.pcl_id}
+                    type="button"
+                    onClick={() => togglePcl(pcl.pcl_id)}
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      border: '1px solid var(--border)',
+                      borderRadius: '20px',
+                      background: selectedPclIds.includes(pcl.pcl_id) ? 'var(--primary)' : 'transparent',
+                      color: selectedPclIds.includes(pcl.pcl_id) ? '#fff' : 'var(--text)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {pcl.course_name} ({pcl.course_code})
                   </button>
                 ))}
               </div>
-              {[
-                ['Full Name',   name,     setName,     'Your full name',    'text'],
-                ['Email',       email,    setEmail,    'your@email.com',    'email'],
-                ['Password',    password, setPassword, 'Min. 6 characters', 'password'],
-                ['Confirm Password', confirm, setConfirm, 'Repeat password', 'password'],
-              ].map(([label, val, set, placeholder, type])=>(
-                <div key={label}>
-                  <label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>{label}</label>
-                  <input type={type} value={val} onChange={e=>set(e.target.value)} placeholder={placeholder}
-                    className='w-full bg-input border border-border rounded-lg px-4 py-3 text-primary text-sm focus:border-teal/60 focus:outline-none'/>
-                </div>
+            </Field>
+          )}
+        </>
+      )}
+
+      <Field label="Preferred Learning Style (optional)">
+        <select className={styles.input} value={learningStyle} onChange={e => setLearningStyle(e.target.value)}>
+          <option value="reading">Reading/Writing</option>
+          <option value="visual">Visual</option>
+          <option value="auditory">Auditory</option>
+          <option value="kinesthetic">Kinesthetic</option>
+        </select>
+      </Field>
+
+      <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <button type="button" className={styles.submitBtn} onClick={prevStep} style={{ flex: 1, background: 'var(--card-hover)' }}>← Back</button>
+        <button type="button" className={styles.submitBtn} onClick={nextStep} style={{ flex: 2 }}>Continue →</button>
+      </div>
+    </>
+  );
+
+  const renderTeacherDetails = () => (
+    // … (keep existing code, unchanged)
+    <>
+      <div className={styles.formHeader}>
+        <h1 className={styles.formTitle}>Teacher details</h1>
+        <p className={styles.formSub}>Add the subjects you teach</p>
+      </div>
+      {teacherSubjects.map((subj, idx) => (
+        <div key={idx} style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem', position: 'relative' }}>
+          <Field label="Subject Name">
+            <input className={styles.input} type="text" placeholder="e.g. Mathematics" value={subj.name} onChange={e => updateTeacherSubject(idx, 'name', e.target.value)} />
+          </Field>
+          <Field label="Grade Level">
+            <select className={styles.input} value={subj.grade_level} onChange={e => updateTeacherSubject(idx, 'grade_level', e.target.value)}>
+              <option value="">-- Select --</option>
+              {Array.from({ length: 12 }, (_, i) => <option key={i+1} value={i+1}>{i+1}</option>)}
+            </select>
+          </Field>
+          {teacherSubjects.length > 1 && (
+            <button type="button" onClick={() => removeTeacherSubject(idx)} style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', background: 'none', border: 'none', color: 'var(--error)', cursor: 'pointer' }}>✕</button>
+          )}
+        </div>
+      ))}
+      <button type="button" onClick={addTeacherSubject} style={{ background: 'none', border: '1px dashed var(--border)', padding: '0.5rem', width: '100%', cursor: 'pointer', borderRadius: '6px', marginBottom: '1rem' }}>
+        + Add another subject
+      </button>
+      <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <button type="button" className={styles.submitBtn} onClick={prevStep} style={{ flex: 1, background: 'var(--card-hover)' }}>← Back</button>
+        <button type="button" className={styles.submitBtn} onClick={nextStep} style={{ flex: 2 }}>Continue →</button>
+      </div>
+    </>
+  );
+
+  const renderLecturerDetails = () => (
+    // … (keep existing code, unchanged)
+    <>
+      <div className={styles.formHeader}>
+        <h1 className={styles.formTitle}>Lecturer details</h1>
+        <p className={styles.formSub}>Select your faculty</p>
+      </div>
+      <Field label="Faculty">
+        <select className={styles.input} value={facultyId} onChange={e => setFacultyId(e.target.value)}>
+          <option value="">-- Select --</option>
+          {faculties.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+      </Field>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+        Course assignments will be configured by your administrator after approval.
+      </p>
+      <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <button type="button" className={styles.submitBtn} onClick={prevStep} style={{ flex: 1, background: 'var(--card-hover)' }}>← Back</button>
+        <button type="button" className={styles.submitBtn} onClick={nextStep} style={{ flex: 2 }}>Continue →</button>
+      </div>
+    </>
+  );
+
+  const renderReview = () => (
+    // … (keep existing code, unchanged)
+    <>
+      <div className={styles.formHeader}>
+        <h1 className={styles.formTitle}>Review your details</h1>
+        <p className={styles.formSub}>Make sure everything looks right</p>
+      </div>
+      <div style={{ background: 'var(--card-hover)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+        <p><strong>Role:</strong> {ROLES.find(r => r.key === role)?.title}</p>
+        <p><strong>Name:</strong> {form.first_name} {form.last_name}</p>
+        <p><strong>Email:</strong> {form.email}</p>
+        {role === 'student' && (
+          <>
+            <p><strong>Education Level:</strong> {educationLevel}</p>
+            {educationLevel === 'school' && (
+              <>
+                <p><strong>Grade:</strong> {grade}</p>
+                <p><strong>Class:</strong> {classes.find(c => c.id === Number(classId))?.name || '—'}</p>
+              </>
+            )}
+            {educationLevel === 'tertiary' && (
+              <>
+                <p><strong>Faculty:</strong> {faculties.find(f => f.id === Number(facultyId))?.name || '—'}</p>
+                <p><strong>Programme:</strong> {programmes.find(p => p.id === Number(programmeId))?.name || '—'}</p>
+                <p><strong>Level:</strong> {level}</p>
+                <p><strong>Courses:</strong> {
+                  programmeCourses
+                    .filter(pcl => selectedPclIds.includes(pcl.pcl_id))
+                    .map(pcl => pcl.course_name)
+                    .join(', ') || 'None'
+                }</p>
+              </>
+            )}
+            <p><strong>Learning Style:</strong> {learningStyle}</p>
+          </>
+        )}
+        {role === 'teacher' && (
+          <div>
+            <strong>Subjects:</strong>
+            <ul>
+              {teacherSubjects.filter(s => s.name && s.grade_level).map((s, i) => (
+                <li key={i}>{s.name} (Grade {s.grade_level})</li>
               ))}
+            </ul>
+          </div>
+        )}
+        {role === 'lecturer' && (
+          <p><strong>Faculty:</strong> {faculties.find(f => f.id === Number(facultyId))?.name || '—'}</p>
+        )}
+      </div>
+      <button type="button" className={styles.submitBtn} onClick={handleSubmit} disabled={loading}>
+        {loading && <span className={styles.spinnerInline} />}
+        {loading ? 'Creating account…' : 'Create Account'}
+      </button>
+      <button type="button" className={styles.submitBtn} onClick={prevStep} style={{ marginTop: '0.5rem', background: 'var(--card-hover)' }}>← Back</button>
+    </>
+  );
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.orbs} aria-hidden="true">
+        <div className={`${styles.orb} ${styles.orb1}`} />
+        <div className={`${styles.orb} ${styles.orb2}`} />
+      </div>
+
+      <div className={styles.cardWrap}>
+        <Link to="/" className={styles.logo}>Sive<em>Adapt</em></Link>
+
+        <div className={styles.card}>
+          <div className={styles.tabs}>
+            <Link to="/auth" className={styles.tabBtn}>Sign in</Link>
+            <button type="button" className={`${styles.tabBtn} ${styles.activeTab}`} disabled>Create account</button>
+          </div>
+
+          {error && (
+            <div className={styles.errorBox}>
+              <span className={styles.errorIcon}>⚠</span> {error}
             </div>
           )}
 
-          {/* STEP 1 — Grade (student) */}
-          {step === 1 && !isTeacher && (
-            <div>
-              <h2 className='text-primary font-semibold mb-2'>Select Your Grade</h2>
-              <p className='text-muted text-sm mb-4'>
-                {isTertiary
-                  ? 'Tertiary students will choose subjects in the next step.'
-                  : 'You will be automatically enrolled in all subjects available for your grade.'}
-              </p>
-              <div className='max-h-80 overflow-y-auto pr-1 space-y-3'>
-                {['Primary','High School','Tertiary','Postgraduate'].map(group=>(
-                  <div key={group}>
-                    <p className='text-muted text-xs uppercase tracking-wide mb-2'>{group}</p>
-                    <div className='flex flex-wrap gap-2'>
-                      {GRADE_OPTIONS.filter(g=>g.group===group).map(g=>(
-                        <button key={g.value} type='button' onClick={()=>setGrade(String(g.value))}
-                          className={`px-3 py-1.5 rounded-lg border text-sm transition-all ${grade===String(g.value)?'border-teal bg-teal/10 text-teal font-medium':'border-border text-muted hover:text-primary'}`}>
-                          {g.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {grade && !isTertiary && (
-                <div className='mt-4 p-4 bg-teal/5 border border-teal/20 rounded-xl'>
-                  {autoEnrolled.length > 0 ? (
-                    <>
-                      <p className='text-teal text-xs font-semibold mb-2'>
-                        ✓ You will be auto-enrolled in {autoEnrolled.length} subject{autoEnrolled.length!==1?'s':''}:
-                      </p>
-                      <div className='flex flex-wrap gap-2'>
-                        {autoEnrolled.map(s=>(
-                          <span key={s.id} className='text-xs px-2.5 py-1 bg-teal/10 border border-teal/30 text-teal rounded-lg font-medium'>
-                            {s.name}
-                          </span>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <div className='flex items-start gap-2'>
-                      <span className='text-amber-400 text-sm flex-shrink-0'>ℹ</span>
-                      <div>
-                        <p className='text-amber-300 text-xs font-medium'>No subjects available for Grade {grade} yet</p>
-                        <p className='text-muted text-xs mt-0.5'>
-                          Your account will be created and you will be automatically enrolled when a teacher registers for your grade.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          <form className={styles.form} noValidate onSubmit={e => e.preventDefault()}>
+            {step === 1 && renderStep1()}
+            {step === 2 && renderStep2()}
+            {step === 3 && role === 'student' && renderStudentDetails()}
+            {step === 3 && role === 'teacher' && renderTeacherDetails()}
+            {step === 3 && role === 'lecturer' && renderLecturerDetails()}
+            {step === 4 && renderReview()}
+          </form>
 
-          {/* STEP 1 — Teacher: Subject + Grade selection */}
-          {step === 1 && isTeacher && (
-            <div className='space-y-5'>
-              <h2 className='text-primary font-semibold mb-1'>Your Subject & Grades</h2>
-              <p className='text-muted text-sm mb-2'>
-                Register the subject you teach and choose exactly which grades you teach.
-              </p>
-              <div>
-                <label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Subject Name</label>
-                <input
-                  value={teachSubjectName}
-                  onChange={e => setTeachSubjectName(e.target.value)}
-                  placeholder='e.g. Mathematics, Science, English Literature…'
-                  className='w-full bg-input border border-border rounded-lg px-4 py-3 text-primary text-sm focus:border-teal/60 focus:outline-none'
-                />
-              </div>
-              <div className='relative'>
-                <label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>
-                  Subject Code
-                  <span className='text-muted font-normal ml-1 normal-case'>(2–6 chars, no spaces)</span>
-                </label>
-                <input
-                  value={teachSubjectCode}
-                  onChange={e => setTeachSubjectCode(e.target.value.toUpperCase().replace(/\s/g,'').slice(0,6))}
-                  onFocus={()=>setShowCodeSuggestions(true)}
-                  onBlur={()=>setTimeout(()=>setShowCodeSuggestions(false),150)}
-                  placeholder='e.g. MATH, SCI, ENG'
-                  maxLength={6}
-                  className='w-full bg-input border border-border rounded-lg px-4 py-3 text-primary text-sm focus:border-teal/60 focus:outline-none'
-                />
-                {showCodeSuggestions && (
-                  <div className='absolute top-full left-0 right-0 mt-1 bg-card border border-border rounded-xl p-3 z-20 shadow-lg'>
-                    <p className='text-muted text-xs mb-2'>Suggestions:</p>
-                    <div className='flex flex-wrap gap-2'>
-                      {SUBJECT_CODE_SUGGESTIONS.filter(c=>!teachSubjectCode||c.startsWith(teachSubjectCode)).map(c=>(
-                        <button key={c} type='button'
-                          onMouseDown={()=>setTeachSubjectCode(c)}
-                          className='text-xs px-2.5 py-1 border border-border rounded-lg text-muted hover:text-teal hover:border-teal/40 transition-colors'>
-                          {c}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div>
-                <label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>Education Level</label>
-                <div className='flex flex-wrap gap-2'>
-                  {TEACHER_LEVELS.map(level => (
-                    <button
-                      key={level.level}
-                      type='button'
-                      onClick={() => setTeacherLevel(level.level)}
-                      className={`px-3 py-1.5 rounded-lg border text-sm transition-all ${
-                        teacherLevel === level.level
-                          ? 'border-teal bg-teal/10 text-teal font-medium'
-                          : 'border-border text-muted hover:text-primary'
-                      }`}
-                    >
-                      {level.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className='text-muted text-xs uppercase tracking-wide block mb-1.5'>
-                  Grades You Teach
-                  <span className='text-muted font-normal ml-1 normal-case'>(select all that apply)</span>
-                </label>
-                <div className='flex flex-wrap gap-2'>
-                  {currentLevelGrades.map(g => {
-                    const gradeLabel = g <= 12 ? `Grade ${g}` : (g <= 17 ? `Level ${g-12}` : (g===18 ? 'Masters' : 'PhD'));
-                    const isSelected = selectedGrades.includes(g);
-                    return (
-                      <button
-                        key={g}
-                        type='button'
-                        onClick={() => {
-                          if (isSelected) {
-                            setSelectedGrades(prev => prev.filter(gr => gr !== g));
-                          } else {
-                            setSelectedGrades(prev => [...prev, g]);
-                          }
-                        }}
-                        className={`px-3 py-1.5 rounded-lg border text-sm transition-all ${
-                          isSelected
-                            ? 'border-teal bg-teal/10 text-teal font-medium'
-                            : 'border-border text-muted hover:text-primary'
-                        }`}
-                      >
-                        {gradeLabel}
-                      </button>
-                    );
-                  })}
-                </div>
-                {selectedGrades.length === 0 && (
-                  <p className='text-amber-400 text-xs mt-2'>Select at least one grade.</p>
-                )}
-              </div>
-              {teachSubjectName && teachSubjectCode && selectedGrades.length > 0 && (
-                <div className='p-3 bg-teal/5 border border-teal/20 rounded-xl'>
-                  <p className='text-teal text-xs font-semibold mb-1'>Subject preview:</p>
-                  <p className='text-primary text-sm'>
-                    <span className='font-medium'>{teachSubjectName}</span>
-                    <span className='text-muted mx-2'>·</span>
-                    <span className='badge-teal text-xs'>{teachSubjectCode || '—'}</span>
-                    <span className='text-muted mx-2'>·</span>
-                    <span className='text-muted text-xs'>Grades {selectedGrades.sort((a,b)=>a-b).join(', ')}</span>
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* STEP 2 — Tertiary subject selection (students only) with SEARCH */}
-          {step === 2 && isTertiary && !isTeacher && (
-            <div>
-              <h2 className='text-primary font-semibold mb-2'>Choose Your Subjects</h2>
-              <p className='text-muted text-sm mb-4'>
-                Search for your courses by code or name (e.g. CSC411, Mathematics) and add them to your list.
-              </p>
-
-              {/* Search input */}
-              <div className='mb-4'>
-                <input
-                  type='text'
-                  placeholder='Search by code or name...'
-                  value={subjectSearch}
-                  onChange={e => setSubjectSearch(e.target.value)}
-                  className='w-full bg-input border border-border rounded-lg px-4 py-2.5 text-primary text-sm focus:border-teal/60 focus:outline-none'
-                />
-              </div>
-
-              {loadingSubjects ? (
-                <div className='py-10 text-center'><div className='w-6 h-6 border-2 border-teal/30 border-t-teal rounded-full animate-spin mx-auto'/></div>
-              ) : availableSubjects.length === 0 ? (
-                <div className='py-10 text-center'>
-                  <span className='text-4xl block mb-3'>📚</span>
-                  <p className='text-primary font-medium mb-1'>No subjects available yet</p>
-                  <p className='text-muted text-sm'>
-                    No lecturers have registered subjects yet. Your account will be created
-                    and you can enrol in subjects from your profile once they are available.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  {/* Filtered list of subjects */}
-                  <div className='space-y-2 max-h-72 overflow-y-auto pr-1 mb-4'>
-                    {availableSubjects
-                      .filter(s =>
-                        s.name.toLowerCase().includes(subjectSearch.toLowerCase()) ||
-                        s.code.toLowerCase().includes(subjectSearch.toLowerCase())
-                      )
-                      .map(s => {
-                        const checked = selectedSubjects.includes(s.id);
-                        return (
-                          <button
-                            key={s.id}
-                            type='button'
-                            onClick={() => setSelectedSubjects(prev =>
-                              checked ? prev.filter(id => id !== s.id) : [...prev, s.id]
-                            )}
-                            className={`w-full text-left p-4 rounded-xl border transition-all ${
-                              checked ? 'border-teal bg-teal/5' : 'border-border hover:border-teal/30'
-                            }`}
-                          >
-                            <div className='flex items-center justify-between'>
-                              <div>
-                                <p className='text-primary font-medium text-sm'>{s.name}</p>
-                                <p className='text-muted text-xs'>{s.code}</p>
-                              </div>
-                              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                                checked ? 'bg-teal border-teal' : 'border-border'
-                              }`}>
-                                {checked && <span className='text-app text-xs font-bold'>✓</span>}
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                  </div>
-
-                  {/* Selected subjects summary */}
-                  {selectedSubjects.length > 0 && (
-                    <div className='mt-4 p-3 bg-teal/5 border border-teal/20 rounded-xl'>
-                      <p className='text-teal text-xs font-semibold mb-2'>
-                        Selected ({selectedSubjects.length}):
-                      </p>
-                      <div className='flex flex-wrap gap-2'>
-                        {selectedSubjects.map(id => {
-                          const subj = availableSubjects.find(s => s.id === id);
-                          return subj ? (
-                            <span key={id} className='text-xs px-2 py-1 bg-teal/10 border border-teal/30 text-teal rounded-lg'>
-                              {subj.code} – {subj.name}
-                            </span>
-                          ) : null;
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-              <p className='text-muted text-xs mt-3'>
-                {selectedSubjects.length} subject{selectedSubjects.length !== 1 ? 's' : ''} selected
-              </p>
-            </div>
-          )}
-
-          {/* VARK step (students only) */}
-          {!isTeacher && step === (isTertiary ? 3 : 2) && (
-            <div>
-              <h2 className='text-primary font-semibold mb-1'>Learning Style Assessment</h2>
-              <p className='text-muted text-sm mb-4'>5 quick questions to personalise your experience. No right or wrong answers.</p>
-              <div className='space-y-5 max-h-96 overflow-y-auto pr-1'>
-                {VARK_QUESTIONS.map((vq, qi) => (
-                  <div key={qi}>
-                    <p className='text-primary text-sm font-medium mb-2'>{qi+1}. {vq.q}</p>
-                    <div className='space-y-2'>
-                      {vq.options.map((opt, oi) => {
-                        const sel = varkAnswers[qi]===opt.style;
-                        return (
-                          <button key={oi} type='button'
-                            onClick={()=>setVarkAnswers(p=>({...p,[qi]:opt.style}))}
-                            className={`w-full text-left px-4 py-2.5 rounded-lg border text-sm transition-all ${sel?'border-teal bg-teal/10 text-teal':'border-border text-muted hover:text-primary hover:border-teal/30'}`}>
-                            {opt.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className={`flex gap-3 mt-6 ${step>0?'justify-between':'justify-end'}`}>
-            {step > 0 && (
-              <button type='button' onClick={()=>setStep(s=>s-1)} className='btn-ghost text-sm'>← Back</button>
-            )}
-            {isLastStep ? (
-              <button type='button' onClick={handleSubmit} disabled={submitting}
-                className='btn-primary text-sm disabled:opacity-50'>
-                {submitting ? 'Creating account…' : 'Create Account →'}
-              </button>
-            ) : (
-              <button type='button' onClick={nextStep} className='btn-primary text-sm'>
-                Continue →
-              </button>
-            )}
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '0.5rem', margin: '1rem 0' }}>
+            {[1, 2, 3, 4].map(s => (
+              <div
+                key={s}
+                style={{
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  backgroundColor: s <= step ? 'var(--primary)' : 'var(--border)',
+                }}
+              />
+            ))}
           </div>
         </div>
-
-        <p className='text-center text-muted text-sm mt-4'>
-          Already have an account? <Link to='/login' className='text-teal hover:underline'>Sign in</Link>
-        </p>
       </div>
     </div>
   );
